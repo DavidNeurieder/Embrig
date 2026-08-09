@@ -7,6 +7,7 @@
 use openhil_core::fault::Fault;
 use openhil_core::frame::CanFrame;
 use openhil_core::signal::SignalValue;
+use openhil_core::time::Timestamp;
 use openhil_dbc::Network;
 use thiserror::Error;
 
@@ -57,8 +58,8 @@ pub async fn run_spec<T: TestTarget>(
     target: &mut T,
 ) -> Result<TestResult, TestError> {
     let timeout = parse_duration(&spec.timeout)?;
-    let _budget = timeout;
     let start = target.elapsed_us();
+    let deadline = start.saturating_add(timeout);
     let mut result = TestResult {
         name: spec.name.clone(),
         passed: true,
@@ -85,7 +86,7 @@ pub async fn run_spec<T: TestTarget>(
                 let duration = parse_duration(time)?;
                 target.wait(duration).await.map_err(|e| e.to_string())
             }
-            Step::Expect { spec } => evaluate_expect(spec, target).await,
+            Step::Expect { spec } => evaluate_expect(spec, target, deadline).await,
             Step::Fault {
                 kind,
                 id,
@@ -109,7 +110,17 @@ pub async fn run_spec<T: TestTarget>(
         };
 
         match outcome {
-            Ok(()) => {}
+            Ok(()) => {
+                // The whole test has a time budget; overrunning it fails the
+                // test so a hung test never passes silently.
+                if target.elapsed_us() > deadline {
+                    result.passed = false;
+                    result
+                        .failures
+                        .push(format!("test exceeded its timeout ({})", spec.timeout));
+                    break;
+                }
+            }
             Err(message) => {
                 result.passed = false;
                 result.failures.push(message);
@@ -152,18 +163,25 @@ fn expected_to_signal(value: &ExpectedValue) -> SignalValue {
     }
 }
 
-/// Poll an assertion until it holds or its `within` deadline passes.
-async fn evaluate_expect<T: TestTarget>(spec: &ExpectStep, target: &mut T) -> Result<(), String> {
+/// Poll an assertion until it holds or its `within` deadline passes. Polling
+/// is capped by the whole-test `test_deadline` so a huge `within` cannot run
+/// a test past its budget.
+async fn evaluate_expect<T: TestTarget>(
+    spec: &ExpectStep,
+    target: &mut T,
+    test_deadline: Timestamp,
+) -> Result<(), String> {
     let within = match &spec.within {
         Some(w) => parse_duration(w).map_err(|e| e.to_string())?,
         None => 0,
     };
-    let deadline = target.elapsed_us().saturating_add(within);
+    let expect_deadline = target.elapsed_us().saturating_add(within);
+    let deadline = expect_deadline.min(test_deadline);
 
     loop {
         let frame = target.poll(spec.id).await.map_err(|e| e.to_string())?;
 
-        if spec.present == Some(false) && frame.is_some() {
+        if spec.effective_present() == Some(false) && frame.is_some() {
             return Err(format!(
                 "expected no frame 0x{:03X} but one was observed",
                 spec.id
@@ -183,7 +201,7 @@ async fn evaluate_expect<T: TestTarget>(spec: &ExpectStep, target: &mut T) -> Re
 
 /// Evaluate an assertion against the latest observed frame (or its absence).
 fn check(spec: &ExpectStep, frame: Option<&CanFrame>, network: &Network) -> Result<(), String> {
-    if let Some(present) = spec.present {
+    if let Some(present) = spec.effective_present() {
         return match (present, frame) {
             (true, Some(_)) => Ok(()),
             (false, None) => Ok(()),
@@ -250,7 +268,6 @@ mod tests {
     use super::*;
     use crate::target::{TargetError, POLL_US};
     use openhil_core::frame::CanFrame;
-    use openhil_core::time::Timestamp;
 
     const DBC: &str = r#"VERSION ""
 
@@ -535,7 +552,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         let mut s = spec(0x100);
         s.present = Some(true);
         s.within = Some("50ms".into());
-        evaluate_expect(&s, &mut target).await.unwrap();
+        evaluate_expect(&s, &mut target, 1_000_000).await.unwrap();
         assert!(target.elapsed_us() >= 25_000, "polled past arrival time");
     }
 
@@ -545,7 +562,9 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         let mut s = spec(0x100);
         s.present = Some(true);
         s.within = Some("50ms".into());
-        let err = evaluate_expect(&s, &mut target).await.unwrap_err();
+        let err = evaluate_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
         assert!(err.contains("present"), "got: {err}");
         assert_eq!(target.elapsed_us(), 50_000, "polled until the deadline");
     }
@@ -557,7 +576,9 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         let mut s = spec(0x100);
         s.present = Some(false);
         s.within = Some("10ms".into());
-        let err = evaluate_expect(&s, &mut target).await.unwrap_err();
+        let err = evaluate_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
         assert!(err.contains("expected no frame"), "got: {err}");
     }
 
@@ -566,7 +587,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         let mut target = MockTarget::new();
         let mut s = spec(0x100);
         s.present = Some(false);
-        evaluate_expect(&s, &mut target).await.unwrap();
+        evaluate_expect(&s, &mut target, 1_000_000).await.unwrap();
     }
 
     #[tokio::test]
@@ -575,13 +596,17 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         target.push_now(battery(400.0, "READY"));
         let mut pass = spec(0x100);
         pass.present = Some(true);
-        evaluate_expect(&pass, &mut target).await.unwrap();
+        evaluate_expect(&pass, &mut target, 1_000_000)
+            .await
+            .unwrap();
         assert_eq!(target.elapsed_us(), POLL_US, "single poll, no retry");
 
         let mut target = MockTarget::new();
         let mut fail = spec(0x100);
         fail.present = Some(true);
-        let err = evaluate_expect(&fail, &mut target).await.unwrap_err();
+        let err = evaluate_expect(&fail, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
         assert!(err.contains("present"), "got: {err}");
         assert_eq!(
             target.elapsed_us(),
@@ -598,8 +623,77 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         s.signal = Some("voltage".into());
         s.equals = Some(ExpectedValue::Num(500.0));
         s.within = Some("50ms".into());
-        let err = evaluate_expect(&s, &mut target).await.unwrap_err();
+        let err = evaluate_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
         assert!(err.contains("expected 500, got 400"), "got: {err}");
         assert_eq!(target.elapsed_us(), 50_000);
+    }
+
+    #[tokio::test]
+    async fn expect_absent_alias_rejects_seen_frame() {
+        let mut target = MockTarget::new();
+        target.push_now(battery(400.0, "READY"));
+        let mut s = spec(0x100);
+        s.absent = Some(true);
+        let err = evaluate_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
+        assert!(err.contains("expected no frame"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn run_spec_fails_when_test_exceeds_timeout() {
+        let mut target = MockTarget::new();
+        let spec = TestSpec {
+            name: "slow".into(),
+            timeout: "10ms".into(),
+            steps: vec![Step::Wait {
+                time: "100ms".into(),
+            }],
+        };
+        let result = run_spec(&spec, &mut target).await.unwrap();
+        assert!(!result.passed);
+        assert!(
+            result.failures[0].contains("timeout"),
+            "got: {:?}",
+            result.failures
+        );
+    }
+
+    #[tokio::test]
+    async fn run_spec_passes_within_budget() {
+        let mut target = MockTarget::new();
+        let spec = TestSpec {
+            name: "quick".into(),
+            timeout: "1s".into(),
+            steps: vec![Step::Wait {
+                time: "50ms".into(),
+            }],
+        };
+        let result = run_spec(&spec, &mut target).await.unwrap();
+        assert!(result.passed, "got: {:?}", result.failures);
+    }
+
+    #[tokio::test]
+    async fn run_spec_expect_capped_by_test_deadline() {
+        // A huge `within` cannot push a test past its overall budget: the
+        // poll loop stops at the test deadline, not the `within` deadline.
+        let mut target = MockTarget::new();
+        let spec = TestSpec {
+            name: "capped".into(),
+            timeout: "30ms".into(),
+            steps: vec![Step::Expect {
+                spec: ExpectStep {
+                    id: 0x100,
+                    present: Some(true),
+                    within: Some("10s".into()),
+                    ..ExpectStep::default()
+                },
+            }],
+        };
+        let result = run_spec(&spec, &mut target).await.unwrap();
+        assert!(!result.passed);
+        assert_eq!(target.elapsed_us(), 30_000);
     }
 }

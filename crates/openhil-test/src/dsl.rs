@@ -111,6 +111,11 @@ pub struct ExpectStep {
     /// `present: false` — it must not appear.
     #[serde(default)]
     pub present: Option<bool>,
+    /// Alias for `present` with inverted polarity: `absent: true` requires the
+    /// frame to NOT appear, `absent: false` requires it to appear. Mutually
+    /// exclusive with `present`.
+    #[serde(default)]
+    pub absent: Option<bool>,
     /// Time budget to poll within (e.g. `1s`). Without it the assertion is
     /// checked once against the current bus state.
     #[serde(default)]
@@ -118,21 +123,31 @@ pub struct ExpectStep {
 }
 
 impl ExpectStep {
+    /// The effective `present` semantics, merging the `absent` alias.
+    pub fn effective_present(&self) -> Option<bool> {
+        match self.absent {
+            Some(v) => Some(!v),
+            None => self.present,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), DslError> {
         let ops = usize::from(self.equals.is_some())
             + usize::from(self.greater_than.is_some())
             + usize::from(self.less_than.is_some())
-            + usize::from(self.present.is_some());
+            + usize::from(self.present.is_some())
+            + usize::from(self.absent.is_some());
         if ops != 1 {
             return Err(DslError::BadExpect {
                 id: self.id,
-                message: "exactly one of equals/greater_than/less_than/present must be set".into(),
+                message: "exactly one of equals/greater_than/less_than/present/absent must be set"
+                    .into(),
             });
         }
-        if self.present.is_none() && self.signal.is_none() {
+        if self.present.is_none() && self.absent.is_none() && self.signal.is_none() {
             return Err(DslError::BadExpect {
                 id: self.id,
-                message: "a signal name is required unless `present` is used".into(),
+                message: "a signal name is required unless `present` or `absent` is used".into(),
             });
         }
         if let Some(w) = &self.within {
@@ -293,6 +308,36 @@ steps:
             "name: bad\nsteps:\n  - expect: { id: 0x100, equals: 1 }\n",
         );
         assert!(load_spec(&path).is_err());
+    }
+
+    #[test]
+    fn absent_alias_maps_to_present() {
+        let path = write_tmp(
+            "absent.yaml",
+            "name: absent\nsteps:\n  - expect: { id: 0x100, absent: true }\n",
+        );
+        let spec = load_spec(&path).unwrap();
+        match &spec.steps[0] {
+            Step::Expect { spec } => {
+                assert_eq!(spec.absent, Some(true));
+                assert_eq!(spec.effective_present(), Some(false));
+            }
+            _ => panic!("expected an expect step"),
+        }
+
+        let present = ExpectStep {
+            id: 0x100,
+            absent: Some(false),
+            ..ExpectStep::default()
+        };
+        assert_eq!(present.effective_present(), Some(true));
+
+        // `present` and `absent` together are ambiguous and rejected.
+        let bad = write_tmp(
+            "absent-bad.yaml",
+            "name: bad\nsteps:\n  - expect: { id: 0x100, absent: true, present: false }\n",
+        );
+        assert!(load_spec(&bad).is_err());
     }
 
     #[test]
