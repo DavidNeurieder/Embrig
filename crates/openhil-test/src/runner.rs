@@ -244,3 +244,362 @@ fn check(spec: &ExpectStep, frame: Option<&CanFrame>, network: &Network) -> Resu
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::target::{TargetError, POLL_US};
+    use openhil_core::frame::CanFrame;
+    use openhil_core::time::Timestamp;
+
+    const DBC: &str = r#"VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: engine
+
+BO_ 256 BatteryStatus: 8 engine
+ SG_ voltage : 0|16@1+ (0.1,0) [0|600] "V" engine
+ SG_ state : 16|4@1+ (1,0) [0|4] "" engine
+
+BO_ 544 MotorEnable: 8 engine
+ SG_ motor_enable : 0|1@1+ (1,0) [0|1] "" engine
+
+VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
+"#;
+
+    fn network() -> Network {
+        openhil_dbc::parse(DBC).unwrap()
+    }
+
+    fn spec(id: u32) -> ExpectStep {
+        ExpectStep {
+            id,
+            ..ExpectStep::default()
+        }
+    }
+
+    fn frame(id: u32, data: Vec<u8>) -> CanFrame {
+        CanFrame::new(id, data).unwrap()
+    }
+
+    fn battery(voltage: f64, state: &str) -> CanFrame {
+        let n = network();
+        let message = n.message(0x100).unwrap();
+        let raw = message
+            .encode_signals(&[
+                ("voltage", voltage),
+                (
+                    "state",
+                    message.physical_for_symbol("state", state).unwrap(),
+                ),
+            ])
+            .unwrap();
+        frame(0x100, raw)
+    }
+
+    fn motor(enabled: bool) -> CanFrame {
+        let n = network();
+        let message = n.message(0x220).unwrap();
+        let raw = message
+            .encode_signals(&[("motor_enable", if enabled { 1.0 } else { 0.0 })])
+            .unwrap();
+        frame(0x220, raw)
+    }
+
+    #[test]
+    fn check_present() {
+        let n = network();
+        let present = ExpectStep {
+            present: Some(true),
+            ..spec(0x100)
+        };
+        assert!(check(&present, Some(&battery(400.0, "READY")), &n).is_ok());
+        let err = check(&present, None, &n).unwrap_err();
+        assert!(err.contains("present"), "got: {err}");
+
+        let absent = ExpectStep {
+            present: Some(false),
+            ..spec(0x100)
+        };
+        assert!(check(&absent, None, &n).is_ok());
+    }
+
+    #[test]
+    fn check_equals_numeric() {
+        let n = network();
+        let frame = battery(400.0, "READY");
+        let pass = ExpectStep {
+            signal: Some("voltage".into()),
+            equals: Some(ExpectedValue::Num(400.0)),
+            ..spec(0x100)
+        };
+        assert!(check(&pass, Some(&frame), &n).is_ok());
+        let fail = ExpectStep {
+            signal: Some("voltage".into()),
+            equals: Some(ExpectedValue::Num(401.0)),
+            ..spec(0x100)
+        };
+        let err = check(&fail, Some(&frame), &n).unwrap_err();
+        assert!(err.contains("expected 401, got 400"), "got: {err}");
+    }
+
+    #[test]
+    fn check_equals_bool() {
+        let n = network();
+        let on = motor(true);
+        let pass = ExpectStep {
+            signal: Some("motor_enable".into()),
+            equals: Some(ExpectedValue::Bool(true)),
+            ..spec(0x220)
+        };
+        assert!(check(&pass, Some(&on), &n).is_ok());
+        let fail = ExpectStep {
+            signal: Some("motor_enable".into()),
+            equals: Some(ExpectedValue::Bool(false)),
+            ..spec(0x220)
+        };
+        assert!(check(&fail, Some(&on), &n).is_err());
+    }
+
+    #[test]
+    fn check_equals_symbol() {
+        let n = network();
+        let frame = battery(400.0, "READY");
+        let pass = ExpectStep {
+            signal: Some("state".into()),
+            equals: Some(ExpectedValue::Str("READY".into())),
+            ..spec(0x100)
+        };
+        assert!(check(&pass, Some(&frame), &n).is_ok());
+        let fail = ExpectStep {
+            signal: Some("state".into()),
+            equals: Some(ExpectedValue::Str("FAULT".into())),
+            ..spec(0x100)
+        };
+        assert!(check(&fail, Some(&frame), &n).is_err());
+    }
+
+    #[test]
+    fn check_comparisons() {
+        let n = network();
+        let frame = battery(400.0, "READY");
+        let gt_pass = ExpectStep {
+            signal: Some("voltage".into()),
+            greater_than: Some(350.0),
+            ..spec(0x100)
+        };
+        assert!(check(&gt_pass, Some(&frame), &n).is_ok());
+        let gt_fail = ExpectStep {
+            signal: Some("voltage".into()),
+            greater_than: Some(450.0),
+            ..spec(0x100)
+        };
+        let err = check(&gt_fail, Some(&frame), &n).unwrap_err();
+        assert!(err.contains("expected > 450, got 400"), "got: {err}");
+        let lt_pass = ExpectStep {
+            signal: Some("voltage".into()),
+            less_than: Some(450.0),
+            ..spec(0x100)
+        };
+        assert!(check(&lt_pass, Some(&frame), &n).is_ok());
+    }
+
+    #[test]
+    fn check_unknown_signal_and_frame() {
+        let n = network();
+        let battery_frame = battery(400.0, "READY");
+        let unknown = ExpectStep {
+            signal: Some("nope".into()),
+            equals: Some(ExpectedValue::Num(1.0)),
+            ..spec(0x100)
+        };
+        assert!(check(&unknown, Some(&battery_frame), &n).is_err());
+
+        let missing = ExpectStep {
+            signal: Some("voltage".into()),
+            equals: Some(ExpectedValue::Num(400.0)),
+            ..spec(0x100)
+        };
+        let err = check(&missing, None, &n).unwrap_err();
+        assert!(err.contains("no frame"), "got: {err}");
+
+        let not_in_dbc = ExpectStep {
+            signal: Some("voltage".into()),
+            equals: Some(ExpectedValue::Num(400.0)),
+            ..spec(0x999)
+        };
+        assert!(check(&not_in_dbc, Some(&frame(0x999, vec![0; 8])), &n).is_err());
+    }
+
+    /// Minimal deterministic target: frames are returned by `poll` once their
+    /// timestamp has been reached; `wait`/`poll` advance `elapsed_us`.
+    struct MockTarget {
+        network: Network,
+        time: Timestamp,
+        visible: Vec<CanFrame>,
+        later: Vec<(Timestamp, CanFrame)>,
+    }
+
+    impl MockTarget {
+        fn new() -> Self {
+            Self {
+                network: network(),
+                time: 0,
+                visible: Vec::new(),
+                later: Vec::new(),
+            }
+        }
+
+        fn push_now(&mut self, f: CanFrame) {
+            self.visible.push(f);
+        }
+
+        fn push_at(&mut self, f: CanFrame, at_us: Timestamp) {
+            self.later.push((at_us, f));
+        }
+
+        fn flush(&mut self) {
+            let time = self.time;
+            let mut i = 0;
+            while i < self.later.len() {
+                if self.later[i].0 <= time {
+                    let (_, f) = self.later.remove(i);
+                    self.visible.push(f);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    impl TestTarget for MockTarget {
+        fn network(&self) -> &Network {
+            &self.network
+        }
+
+        fn elapsed_us(&self) -> Timestamp {
+            self.time
+        }
+
+        fn reset(&mut self) -> Result<(), TargetError> {
+            self.time = 0;
+            self.visible.clear();
+            self.later.clear();
+            Ok(())
+        }
+
+        fn set_signal(
+            &mut self,
+            _ecu: &str,
+            _id: u32,
+            _signal: &str,
+            _value: SignalValue,
+        ) -> Result<(), TargetError> {
+            Err(TargetError::UnsupportedOnHardware("mock".into()))
+        }
+
+        fn add_fault(
+            &mut self,
+            _fault: Fault,
+            _start: Option<Timestamp>,
+            _duration: Option<Timestamp>,
+        ) -> Result<(), TargetError> {
+            Err(TargetError::UnsupportedOnHardware("mock".into()))
+        }
+
+        async fn send(&mut self, f: CanFrame) -> Result<(), TargetError> {
+            self.push_now(f);
+            Ok(())
+        }
+
+        async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
+            self.time += duration;
+            self.flush();
+            Ok(())
+        }
+
+        async fn poll(&mut self, id: u32) -> Result<Option<CanFrame>, TargetError> {
+            self.time += POLL_US;
+            self.flush();
+            Ok(self.visible.iter().rev().find(|f| f.id == id).cloned())
+        }
+    }
+
+    #[tokio::test]
+    async fn expect_present_polls_until_frame_arrives() {
+        let mut target = MockTarget::new();
+        target.push_at(battery(400.0, "READY"), 25_000);
+        let mut s = spec(0x100);
+        s.present = Some(true);
+        s.within = Some("50ms".into());
+        evaluate_expect(&s, &mut target).await.unwrap();
+        assert!(target.elapsed_us() >= 25_000, "polled past arrival time");
+    }
+
+    #[tokio::test]
+    async fn expect_present_times_out() {
+        let mut target = MockTarget::new();
+        let mut s = spec(0x100);
+        s.present = Some(true);
+        s.within = Some("50ms".into());
+        let err = evaluate_expect(&s, &mut target).await.unwrap_err();
+        assert!(err.contains("present"), "got: {err}");
+        assert_eq!(target.elapsed_us(), 50_000, "polled until the deadline");
+    }
+
+    #[tokio::test]
+    async fn expect_absent_rejects_seen_frame() {
+        let mut target = MockTarget::new();
+        target.push_now(battery(400.0, "READY"));
+        let mut s = spec(0x100);
+        s.present = Some(false);
+        s.within = Some("10ms".into());
+        let err = evaluate_expect(&s, &mut target).await.unwrap_err();
+        assert!(err.contains("expected no frame"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn expect_absent_passes_without_frame() {
+        let mut target = MockTarget::new();
+        let mut s = spec(0x100);
+        s.present = Some(false);
+        evaluate_expect(&s, &mut target).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn expect_without_within_checks_once() {
+        let mut target = MockTarget::new();
+        target.push_now(battery(400.0, "READY"));
+        let mut pass = spec(0x100);
+        pass.present = Some(true);
+        evaluate_expect(&pass, &mut target).await.unwrap();
+        assert_eq!(target.elapsed_us(), POLL_US, "single poll, no retry");
+
+        let mut target = MockTarget::new();
+        let mut fail = spec(0x100);
+        fail.present = Some(true);
+        let err = evaluate_expect(&fail, &mut target).await.unwrap_err();
+        assert!(err.contains("present"), "got: {err}");
+        assert_eq!(
+            target.elapsed_us(),
+            POLL_US,
+            "checked once, no deadline wait"
+        );
+    }
+
+    #[tokio::test]
+    async fn expect_equals_retries_until_deadline() {
+        let mut target = MockTarget::new();
+        target.push_now(battery(400.0, "READY"));
+        let mut s = spec(0x100);
+        s.signal = Some("voltage".into());
+        s.equals = Some(ExpectedValue::Num(500.0));
+        s.within = Some("50ms".into());
+        let err = evaluate_expect(&s, &mut target).await.unwrap_err();
+        assert!(err.contains("expected 500, got 400"), "got: {err}");
+        assert_eq!(target.elapsed_us(), 50_000);
+    }
+}

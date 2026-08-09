@@ -72,3 +72,55 @@ impl Recorder {
         self.records.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(id: u32) -> CanFrame {
+        CanFrame::with_ts(id, vec![0; 8], id as u64).unwrap()
+    }
+
+    #[test]
+    fn frames_returns_most_recent_first() {
+        let mut r = Recorder::new();
+        r.event(0, "ecu", "boot");
+        r.frame(frame(0x100));
+        r.frame(frame(0x200));
+        let ids: Vec<u32> = r.frames().iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![0x200, 0x100], "events do not appear in frames()");
+    }
+
+    #[test]
+    fn last_frame_returns_newest_for_id() {
+        let mut r = Recorder::new();
+        assert_eq!(r.last_frame(0x100), None);
+        r.frame(frame(0x100));
+        r.frame(frame(0x200));
+        r.frame(frame(0x100));
+        assert_eq!(r.last_frame(0x100).unwrap().id, 0x100);
+        assert_eq!(r.last_frame(0x100).unwrap().ts, 0x100, "newest wins");
+        assert_eq!(r.last_frame(0x999), None);
+    }
+
+    #[test]
+    fn has_frame_sees_frames_but_not_events() {
+        let mut r = Recorder::new();
+        r.event(1, "ecu", "fault");
+        assert!(!r.has_frame(0x100));
+        r.frame(frame(0x100));
+        assert!(r.has_frame(0x100));
+        assert!(!r.has_frame(0x200));
+    }
+
+    #[test]
+    fn clear_empties_records() {
+        let mut r = Recorder::new();
+        r.frame(frame(0x100));
+        r.event(1, "ecu", "fault");
+        r.clear();
+        assert!(r.records.is_empty());
+        assert!(!r.has_frame(0x100));
+        assert_eq!(r.last_frame(0x100), None);
+    }
+}
