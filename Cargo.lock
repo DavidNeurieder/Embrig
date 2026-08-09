@@ -446,6 +446,7 @@ dependencies = [
  "openhil-dbc",
  "openhil-models",
  "openhil-test",
+ "serde_json",
  "tokio",
 ]
 

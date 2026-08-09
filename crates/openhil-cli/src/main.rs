@@ -53,7 +53,7 @@ enum Command {
         /// The vehicle.yaml file.
         vehicle: PathBuf,
         /// Test files or directories (defaults to `tests` next to vehicle.yaml).
-        #[arg(value_name = "TESTS", default_value = "tests")]
+        #[arg(value_name = "TESTS", num_args = 0..)]
         tests: Vec<PathBuf>,
         /// Interface name from vehicle.yaml (`virtual` or `socketcan`).
         #[arg(long)]

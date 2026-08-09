@@ -133,7 +133,21 @@ async fn cmd_test(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let files = resolve_test_files(test_inputs, &vehicle_dir)?;
+    // The default test location is `tests` next to vehicle.yaml, resolved in
+    // code (not as a CLI default) so a stray `tests/` dir in the cwd never
+    // shadows it.
+    let files = if test_inputs.is_empty() {
+        let default_dir = vehicle_dir.join("tests");
+        if !default_dir.is_dir() {
+            bail!(
+                "no test files given and default `{}` does not exist",
+                default_dir.display()
+            );
+        }
+        read_yaml_files(&default_dir)?
+    } else {
+        resolve_test_files(test_inputs, &vehicle_dir)?
+    };
     let label = vehicle.display().to_string();
 
     let target = select_target(&config, &dbc_path, interface)?;
@@ -256,16 +270,7 @@ fn resolve_test_files(inputs: &[PathBuf], vehicle_dir: &Path) -> Result<Vec<Path
             );
         };
         if path.is_dir() {
-            let mut files: Vec<PathBuf> = fs::read_dir(&path)
-                .with_context(|| format!("cannot read `{}`", path.display()))?
-                .filter_map(|entry| entry.ok().map(|e| e.path()))
-                .filter(|p| {
-                    p.extension()
-                        .is_some_and(|ext| ext == "yaml" || ext == "yml")
-                })
-                .collect();
-            files.sort();
-            out.extend(files);
+            out.extend(read_yaml_files(&path)?);
         } else {
             out.push(path);
         }
@@ -276,6 +281,20 @@ fn resolve_test_files(inputs: &[PathBuf], vehicle_dir: &Path) -> Result<Vec<Path
         bail!("no test files found");
     }
     Ok(out)
+}
+
+/// All `*.yaml`/`*.yml` files inside a directory, sorted.
+fn read_yaml_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .with_context(|| format!("cannot read `{}`", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+        })
+        .collect();
+    files.sort();
+    Ok(files)
 }
 
 fn print_suite(suite: &openhil_test::SuiteResult) {

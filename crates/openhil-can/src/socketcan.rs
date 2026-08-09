@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use openhil_core::frame::CanFrame;
 use openhil_core::time::Timestamp;
 use socketcan::tokio::CanSocket;
-use socketcan::{CanId, EmbeddedFrame};
+use socketcan::{CanId, EmbeddedFrame, SocketOptions};
 use thiserror::Error;
 
 /// Errors produced by the SocketCAN backend.
@@ -54,6 +54,14 @@ impl SocketCanBus {
             interface: interface.to_string(),
             source,
         })?;
+        // Receive our own transmissions so a single socket can verify the
+        // send → receive path (used by the loopback smoke test).
+        socket
+            .set_recv_own_msgs(true)
+            .map_err(|source| CanError::Open {
+                interface: interface.to_string(),
+                source,
+            })?;
         Ok(Self {
             interface: interface.to_string(),
             socket,

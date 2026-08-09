@@ -52,3 +52,16 @@ jobs:
 
       - name: Virtual tests still pass
         run: cargo run -q --features socketcan --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+
+  vcan-smoke:
+    name: vcan0 socketcan smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: SocketCAN round trip on vcan0
+        run: ./scripts/vcan-smoke.sh
