@@ -1,0 +1,55 @@
+# OpenHIL vehicle definition.
+# ECUs are stepped in this order, so the simulation is deterministic.
+name: ev-powertrain
+dbc: powertrain.dbc
+step_us: 1000
+
+ecus:
+  # Static nodes: the test runner overrides their signals to inject stimulus.
+  - name: battery
+    type: config
+    message: BatteryStatus
+    period_us: 100000
+    signals:
+      voltage: 400.0
+      current: 0.0
+      soc: 90.0
+      state: "READY"
+      contactor_closed: true
+
+  - name: brake
+    type: config
+    message: BrakeStatus
+    period_us: 100000
+    signals:
+      brake_pressed: false
+
+  - name: driver
+    type: config
+    message: DriverRequest
+    period_us: 100000
+    signals:
+      drive_enabled: true
+
+  - name: charger
+    type: charger
+    period_us: 100000
+    listen: [0x200, 0x100]
+
+  # The ECU under test.
+  - name: vcu
+    type: vcu
+    period_us: 50000
+    listen: [0x100, 0x110, 0x120, 0x210]
+
+  - name: motor
+    type: motor
+    period_us: 50000
+    listen: [0x220]
+
+interfaces:
+  - name: virtual
+    type: virtual
+  - name: vcan0
+    type: socketcan
+    interface: vcan0

@@ -1,0 +1,8 @@
+# Over 450 V the VCU refuses to enable the motor (safe state).
+name: overvoltage_disables_motor
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - set_signal: { ecu: battery, id: 0x100, signal: voltage, value: 460.0 }
+  - expect: { id: 0x220, signal: motor_enable, equals: false, within: 1s }
+  - expect: { id: 0x230, signal: state, equals: "SAFE", within: 1s }

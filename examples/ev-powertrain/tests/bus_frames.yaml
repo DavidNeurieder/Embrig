@@ -1,0 +1,8 @@
+# The bus carries periodic battery and brake frames.
+name: bus_carries_periodic_frames
+timeout: 5s
+steps:
+  - wait: { time: 200ms }
+  - expect: { id: 0x100, present: true, within: 500ms }
+  - expect: { id: 0x110, present: true, within: 500ms }
+  - expect: { id: 0x230, present: true, within: 500ms }

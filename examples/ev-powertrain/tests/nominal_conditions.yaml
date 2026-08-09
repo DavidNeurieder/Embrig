@@ -1,0 +1,7 @@
+# Under nominal conditions the VCU enables the motor and it runs.
+name: nominal_conditions_enable_motor
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - expect: { id: 0x220, signal: motor_enable, equals: true, within: 1s }
+  - expect: { id: 0x230, signal: state, equals: "RUNNING", within: 1s }

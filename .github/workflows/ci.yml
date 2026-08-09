@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy (all features)
+        run: cargo clippy --workspace --all-targets --features socketcan -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Test with socketcan feature
+        run: cargo test --workspace --features socketcan
+
+      - name: End-to-end example
+        run: |
+          cargo run -q --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+
+  socketcan-build:
+    name: socketcan feature build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build with socketcan
+        run: cargo build --workspace --features socketcan
+
+      - name: Virtual tests still pass
+        run: cargo run -q --features socketcan --bin openhil -- test examples/ev-powertrain/vehicle.yaml

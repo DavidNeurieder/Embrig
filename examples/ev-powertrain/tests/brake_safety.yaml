@@ -1,0 +1,7 @@
+# Pressing the brake immediately releases the motor.
+name: brake_press_disables_motor
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - set_signal: { ecu: brake, id: 0x110, signal: brake_pressed, value: true }
+  - expect: { id: 0x220, signal: motor_enable, equals: false, within: 1s }

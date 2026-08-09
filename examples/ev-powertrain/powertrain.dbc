@@ -1,0 +1,37 @@
+VERSION "0.1"
+
+NS_ :
+
+BS_:
+
+BU_: Vector__XXX
+
+BO_ 256 BatteryStatus: 8 Vector__XXX
+ SG_ voltage : 0|16@1+ (0.1,0) [0|600] "V"  Vector__XXX
+ SG_ current : 16|16@1+ (0.1,0) [-500|500] "A"  Vector__XXX
+ SG_ soc : 32|8@1+ (1,0) [0|100] "%"  Vector__XXX
+ SG_ state : 40|8@1+ (1,0) [0|4] ""  Vector__XXX
+ SG_ contactor_closed : 48|1@1+ (1,0) [0|1] ""  Vector__XXX
+
+BO_ 272 BrakeStatus: 8 Vector__XXX
+ SG_ brake_pressed : 0|1@1+ (1,0) [0|1] ""  Vector__XXX
+
+BO_ 288 DriverRequest: 8 Vector__XXX
+ SG_ drive_enabled : 0|1@1+ (1,0) [0|1] ""  Vector__XXX
+
+BO_ 512 ChargeRequest: 8 Vector__XXX
+ SG_ charge_request : 0|1@1+ (1,0) [0|1] ""  Vector__XXX
+
+BO_ 528 ChargeStatus: 8 Vector__XXX
+ SG_ state : 0|8@1+ (1,0) [0|3] ""  Vector__XXX
+
+BO_ 544 MotorEnable: 8 Vector__XXX
+ SG_ motor_enable : 0|1@1+ (1,0) [0|1] ""  Vector__XXX
+
+BO_ 560 MotorStatus: 8 Vector__XXX
+ SG_ state : 0|8@1+ (1,0) [0|4] ""  Vector__XXX
+ SG_ rpm : 8|16@1+ (1,0) [0|12000] "rpm"  Vector__XXX
+
+VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
+VAL_ 528 state 0 "IDLE" 1 "CHARGING" 2 "COMPLETE" 3 "FAULT" ;
+VAL_ 560 state 0 "OFF" 1 "READY" 2 "RUNNING" 3 "SAFE" 4 "FAULT" ;

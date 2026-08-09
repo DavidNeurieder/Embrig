@@ -1,0 +1,9 @@
+# Request charging, then drop the battery bus: the charger must fault.
+name: charger_faults_on_stale_battery
+timeout: 5s
+steps:
+  - send: { id: 0x200, data: [1, 0, 0, 0, 0, 0, 0, 0] }
+  - wait: { time: 300ms }
+  - expect: { id: 0x210, signal: state, equals: "CHARGING", within: 1s }
+  - fault: { type: drop, id: 0x100, duration: 1000ms }
+  - expect: { id: 0x210, signal: state, equals: "FAULT", within: 2s }

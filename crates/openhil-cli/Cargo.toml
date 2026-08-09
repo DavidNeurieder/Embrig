@@ -1,0 +1,23 @@
+[package]
+name = "openhil-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openhil"
+path = "src/main.rs"
+
+[dependencies]
+openhil-core = { workspace = true }
+openhil-dbc = { workspace = true }
+openhil-models = { workspace = true }
+openhil-can = { workspace = true }
+openhil-test = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+
+[features]
+default = []
+socketcan = ["openhil-can/socketcan", "openhil-test/socketcan"]
