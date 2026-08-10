@@ -173,6 +173,82 @@ dependencies = [
 ]
 
 [[package]]
+name = "embrig-can"
+version = "0.1.0"
+dependencies = [
+ "embrig-core",
+ "socketcan",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "embrig-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "embrig-can",
+ "embrig-core",
+ "embrig-dbc",
+ "embrig-models",
+ "embrig-test",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "embrig-core"
+version = "0.1.0"
+
+[[package]]
+name = "embrig-dbc"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "embrig-models"
+version = "0.1.0"
+dependencies = [
+ "embrig-core",
+ "embrig-dbc",
+ "serde",
+ "serde-saphyr",
+ "thiserror",
+]
+
+[[package]]
+name = "embrig-sil"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "embrig-core",
+ "embrig-dbc",
+ "embrig-models",
+ "embrig-test",
+ "serde-saphyr",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "embrig-test"
+version = "0.1.0"
+dependencies = [
+ "embrig-can",
+ "embrig-core",
+ "embrig-dbc",
+ "embrig-models",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -424,68 +500,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "openhil-can"
-version = "0.1.0"
-dependencies = [
- "openhil-core",
- "socketcan",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "openhil-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "openhil-can",
- "openhil-core",
- "openhil-dbc",
- "openhil-models",
- "openhil-test",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "openhil-core"
-version = "0.1.0"
-
-[[package]]
-name = "openhil-dbc"
-version = "0.1.0"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
-name = "openhil-models"
-version = "0.1.0"
-dependencies = [
- "openhil-core",
- "openhil-dbc",
- "serde",
- "serde-saphyr",
- "thiserror",
-]
-
-[[package]]
-name = "openhil-test"
-version = "0.1.0"
-dependencies = [
- "openhil-can",
- "openhil-core",
- "openhil-dbc",
- "openhil-models",
- "serde",
- "serde-saphyr",
- "serde_json",
- "thiserror",
- "tokio",
-]
 
 [[package]]
 name = "pin-project-lite"

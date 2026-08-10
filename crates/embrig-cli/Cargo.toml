@@ -1,0 +1,26 @@
+[package]
+name = "embrig-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "embrig"
+path = "src/main.rs"
+
+[dependencies]
+embrig-core = { workspace = true }
+embrig-dbc = { workspace = true }
+embrig-models = { workspace = true }
+embrig-can = { workspace = true }
+embrig-test = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+default = []
+socketcan = ["embrig-can/socketcan", "embrig-test/socketcan"]

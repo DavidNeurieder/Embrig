@@ -1,0 +1,8 @@
+[package]
+name = "embrig-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "embrig_core"

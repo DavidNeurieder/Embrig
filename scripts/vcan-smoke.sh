@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Bring up a virtual CAN bus (vcan0) and exercise the real SocketCAN path:
-#   openhil test <vehicle> scripts/loopback.yaml --interface vcan0
+#   embrig test <vehicle> scripts/loopback.yaml --interface vcan0
 #
 # The frame is transmitted on the bus and received back on the same socket,
 # proving the socketcan send → receive round trip works outside the simulator.
@@ -30,7 +30,7 @@ echo "==> building with socketcan feature"
 cargo build -q --workspace --features socketcan --manifest-path "${ROOT}/Cargo.toml"
 
 echo "==> running loopback test on ${IFACE}"
-"${ROOT}/target/debug/openhil" test \
+"${ROOT}/target/debug/embrig" test \
     "${ROOT}/examples/ev-powertrain/vehicle.yaml" \
     "${ROOT}/scripts/loopback.yaml" \
     --interface "${IFACE}"

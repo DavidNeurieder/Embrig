@@ -35,7 +35,11 @@ jobs:
 
       - name: End-to-end example
         run: |
-          cargo run -q --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+          cargo run -q --bin embrig -- test examples/ev-powertrain/vehicle.yaml
+
+      - name: SIL example
+        run: |
+          cargo run -q --example sil_firmware --package embrig-sil
 
   socketcan-build:
     name: socketcan feature build
@@ -51,7 +55,7 @@ jobs:
         run: cargo build --workspace --features socketcan
 
       - name: Virtual tests still pass
-        run: cargo run -q --features socketcan --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+        run: cargo run -q --features socketcan --bin embrig -- test examples/ev-powertrain/vehicle.yaml
 
   vcan-smoke:
     name: vcan0 socketcan smoke test

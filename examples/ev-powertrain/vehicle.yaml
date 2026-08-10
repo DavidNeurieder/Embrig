@@ -1,4 +1,4 @@
-# OpenHIL vehicle definition.
+# Embrig vehicle definition.
 # ECUs are stepped in this order, so the simulation is deterministic.
 name: ev-powertrain
 dbc: powertrain.dbc

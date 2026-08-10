@@ -1,0 +1,7 @@
+# Above 90 °C the firmware closes the valve (fail-safe).
+name: overrange_temperature_closes_valve
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - set_signal: { ecu: sensor, id: 0x100, signal: temperature, value: 150.0 }
+  - expect: { id: 0x200, signal: valve_open, equals: false, within: 1s }

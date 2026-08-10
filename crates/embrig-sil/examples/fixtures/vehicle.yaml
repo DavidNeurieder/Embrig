@@ -1,0 +1,27 @@
+# Software-in-the-loop vehicle: the `controller` ECU is host-compiled
+# firmware (`type: sil`), bound in code through the SIL registry.
+name: thermal-controller
+dbc: controller.dbc
+step_us: 1000
+
+ecus:
+  # Static node: the test runner overrides its signals to inject stimulus.
+  - name: sensor
+    type: config
+    message: SensorInput
+    period_us: 100000
+    signals:
+      temperature: 45.0
+
+  # The ECU under test: firmware compiled for the host.
+  - name: controller
+    type: sil
+    period_us: 50000
+    listen: [0x100]
+    step_budget_us: 100000
+
+interfaces:
+  - name: virtual
+    type: virtual
+  - name: sil
+    type: sil

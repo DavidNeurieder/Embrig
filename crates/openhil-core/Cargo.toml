@@ -1,8 +1,0 @@
-[package]
-name = "openhil-core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[lib]
-name = "openhil_core"

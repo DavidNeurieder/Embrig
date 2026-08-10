@@ -1,6 +1,6 @@
 # Loopback test for the SocketCAN path. Sends one frame on the bus and
 # requires it back on the same socket (own-message reception is enabled in
-# `openhil-can`). It is the only example test that works on real hardware —
+# `embrig-can`). It is the only example test that works on real hardware —
 # the others use `set_signal`/`fault`, which are virtual-only.
 name: bus_loopback
 timeout: 5s

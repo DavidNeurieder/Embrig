@@ -1,0 +1,22 @@
+[package]
+name = "embrig-sil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Software-in-the-loop: run host-compiled firmware against the Embrig virtual bus"
+
+[dependencies]
+embrig-core = { workspace = true }
+embrig-dbc = { workspace = true }
+embrig-models = { workspace = true }
+embrig-test = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+serde-saphyr = { workspace = true }
+
+[features]
+default = []
+socketcan = ["embrig-test/socketcan"]

@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Project renamed **OpenHIL → Embrig** ("embrig — open embedded testing");
+  crates renamed `openhil-*` → `embrig-*`, the binary is `embrig`, and the
+  repository/website URLs now use `embrig`. `MVP_PLAN*.md` remain as historical
+  artifacts.
+
+### Added
+
+- **Software-in-the-loop (SIL)** — run host-compiled firmware against the
+  virtual bus with the same YAML suites as virtual/hardware targets:
+  - **`embrig-sil`** — `SilRegistry` (firmware factories keyed by ECU name,
+    closures or `EcuFactory` impls), `SilTarget` (a `TestTarget` that re-runs
+    firmware factories on every reset so state never leaks between tests),
+    and the `sil_run` helper.
+  - **Wall-clock step budget** — each simulated firmware step runs under a
+    budget (default 100 ms, override `step_budget_us` in YAML); an overrun
+    fails the test with `TargetError::SutTimeout` instead of hanging it.
+  - **SUT signal overrides rejected** — the firmware under test is driven via
+    the bus, not via `set_signal` (`TargetError::UnsupportedOnSut`); faults
+    and config-node signal overrides behave exactly as in virtual mode.
+  - `embrig-models` — `EcuKind::Sil` config node and the `EcuFactory` hook on
+    `build_simulation_indexed_with`; `type: sil` without a registered factory
+    fails with a clear "no firmware registered" error.
+  - **`crates/embrig-sil/examples/`** — thermal-controller demo (fixtures +
+    suites + `sil_firmware` example) that passes `2/2`.
+  - CLI: `--interface sil` exits 2 with guidance to use `embrig-sil`.
+  - Tests: 6 SIL unit tests (suite pass, budget overrun, SUT rejection, faults,
+    factory re-run on reset, unknown-registry error) + 1 CLI test.
+
+### Changed
+
+- `embrig-test::TargetError` gains `UnsupportedOnSut` and `SutTimeout`.
+- `embrig-core::EcuError` gains `NotRegistered` for unregistered SIL firmware.
+- Test count updated in docs (91 total, incl. 10 CLI black-box).
 
 ## [0.1.0] - 2026-08-10
 
@@ -17,24 +51,24 @@ real SocketCAN bus.
 
 ### Added
 
-- **`openhil-core`** — deterministic virtual CAN simulation: `CanFrame`,
+- **`embrig-core`** — deterministic virtual CAN simulation: `CanFrame`,
   integer-microsecond clock, `Ecu` trait, config-ordered routing, fault
   injection (drop/delay/corrupt), and an event recorder. Fully reproducible:
   a PASS→FAIL flip is always caused by your change, never the runner.
-- **`openhil-dbc`** — DBC parser (`BO_`/`SG_`/`VAL_`) and signal codec
+- **`embrig-dbc`** — DBC parser (`BO_`/`SG_`/`VAL_`) and signal codec
   (Intel/Motorola byte order, signed values, factor/offset scaling, symbolic
   `VAL_` tables).
-- **`openhil-models`** — vehicle YAML configuration, config-driven ECUs, and
+- **`embrig-models`** — vehicle YAML configuration, config-driven ECUs, and
   reference EV vECUs (charger, VCU, motor) with an overvoltage/safe-state
   behavior set.
-- **`openhil-can`** — async SocketCAN backend (`socketcan` feature), including
+- **`embrig-can`** — async SocketCAN backend (`socketcan` feature), including
   own-message reception for single-socket loopback verification.
-- **`openhil-test`** — YAML test DSL (`send`, `set_signal`, `wait`, `expect`,
+- **`embrig-test`** — YAML test DSL (`send`, `set_signal`, `wait`, `expect`,
   `fault`), assertion operators (`equals`, `greater_than`, `less_than`,
   `present`, `absent`), durations in `us`/`ms`/`s`, a per-test timeout budget,
   an async runner with virtual and hardware targets, and HTML/JSON reports.
   `set_signal`/`fault` are rejected with a clear error on hardware targets.
-- **`openhil-cli`** — the `openhil` binary: `init` (project scaffolding),
+- **`embrig-cli`** — the `embrig` binary: `init` (project scaffolding),
   `simulate` (deterministic trace), `test` (virtual or `--interface <name>`
   hardware), and `report` (render stored JSON to HTML/JSON). Exit codes:
   `0` all pass · `1` test failures · `2` usage/config/load errors.
@@ -48,5 +82,5 @@ real SocketCAN bus.
 - **Root `README.md`** and `IMPLEMENTATION_PLAN.md` documenting the design,
   CLI, DSL, and message map.
 
-[Unreleased]: https://github.com/openhil/openhil
-[0.1.0]: https://github.com/openhil/openhil/releases/tag/v0.1.0
+[Unreleased]: https://github.com/DavidNeurieder/embrig
+[0.1.0]: https://github.com/DavidNeurieder/embrig/releases/tag/v0.1.0

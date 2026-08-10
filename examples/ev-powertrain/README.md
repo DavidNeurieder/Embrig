@@ -1,8 +1,8 @@
-# EV Powertrain — OpenHIL example
+# EV Powertrain — Embrig example
 
 A small electric-vehicle powertrain you can simulate on any laptop in under ten
 minutes — and optionally run against one real ECU over CAN. This is the
-reference "vertical" for OpenHIL.
+reference "vertical" for Embrig.
 
 ## What it is
 
@@ -29,13 +29,13 @@ Any violation drops `motor_enable` to false and the motor falls back to `SAFE`.
 ## Run it
 
 ```sh
-cargo run --release --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+cargo run --release --bin embrig -- test examples/ev-powertrain/vehicle.yaml
 ```
 
 or, installed:
 
 ```sh
-openhil test examples/ev-powertrain/vehicle.yaml
+embrig test examples/ev-powertrain/vehicle.yaml
 ```
 
 Expected output: 5 passing tests. To see one fail, change `voltage: 460.0`
@@ -45,9 +45,9 @@ PASS → FAIL because the safety check is gone.
 Other commands:
 
 ```sh
-openhil simulate examples/ev-powertrain/vehicle.yaml --duration 2s --verbose
-openhil test examples/ev-powertrain/vehicle.yaml --report report.html
-openhil init my-project          # scaffold your own vehicle
+embrig simulate examples/ev-powertrain/vehicle.yaml --duration 2s --verbose
+embrig test examples/ev-powertrain/vehicle.yaml --report report.html
+embrig init my-project          # scaffold your own vehicle
 ```
 
 ## How the tests work
@@ -72,7 +72,7 @@ The same tests run against a real bus. Build with SocketCAN support:
 ```sh
 cargo build --features socketcan
 sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
-openhil test examples/ev-powertrain/vehicle.yaml --interface vcan0
+embrig test examples/ev-powertrain/vehicle.yaml --interface vcan0
 ```
 
 `set_signal` and `fault` steps are virtual-only (there is no router on a real
@@ -92,7 +92,7 @@ Replace one virtual ECU with real hardware and let the bus run against it:
 - 1× SN65HVD230 CAN transceiver module (~€3–8)
 - jumper wires
 - Firmware: run the `0x220` MotorEnable logic (or any ECU) on the STM32;
-  OpenHIL's socketcan mode feeds it the same frames the virtual VCU received.
+  Embrig's socketcan mode feeds it the same frames the virtual VCU received.
 
 ### Real CAN bus / full rig (~€15–50)
 

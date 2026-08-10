@@ -3,27 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenHIL — Deterministic hardware-in-the-loop CAN testing</title>
-  <meta name="description" content="Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run them identically against a deterministic virtual simulation or a real bus over SocketCAN. Deterministic, no flaky tests.">
-  <link rel="canonical" href="https://davidneurieder.github.io/openhil/">
+  <title>Embrig — Deterministic embedded CAN testing, SIL to HIL</title>
+  <meta name="description" content="Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run them identically against host-compiled firmware (SIL), a deterministic virtual simulation, or a real bus over SocketCAN. Deterministic, no flaky tests.">
+  <link rel="canonical" href="https://davidneurieder.github.io/embrig/">
   <meta property="og:type" content="website">
-  <meta property="og:site_name" content="OpenHIL">
-  <meta property="og:title" content="OpenHIL — Deterministic hardware-in-the-loop CAN testing">
-  <meta property="og:description" content="Deterministic hardware-in-the-loop CAN testing. The same YAML tests run on a virtual network or a real bus over SocketCAN.">
-  <meta property="og:url" content="https://davidneurieder.github.io/openhil/">
+  <meta property="og:site_name" content="Embrig">
+  <meta property="og:title" content="Embrig — Deterministic embedded CAN testing, SIL to HIL">
+  <meta property="og:description" content="Deterministic embedded CAN testing. The same YAML tests run against host-compiled firmware (SIL), a virtual network, or a real bus over SocketCAN.">
+  <meta property="og:url" content="https://davidneurieder.github.io/embrig/">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="OpenHIL — Deterministic hardware-in-the-loop CAN testing">
-  <meta name="twitter:description" content="The same YAML tests run on a virtual network or a real bus over SocketCAN. Deterministic, no flaky tests.">
+  <meta name="twitter:title" content="Embrig — Deterministic embedded CAN testing, SIL to HIL">
+  <meta name="twitter:description" content="The same YAML tests run against host-compiled firmware (SIL), a virtual network, or a real bus over SocketCAN. Deterministic, no flaky tests.">
   <link rel="stylesheet" href="styles.css">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "OpenHIL",
+    "name": "Embrig",
     "operatingSystem": "Linux, macOS, Windows",
     "applicationCategory": "DeveloperApplication",
-    "description": "Deterministic hardware-in-the-loop CAN testing: run YAML test suites against a virtual network or a real bus over SocketCAN.",
-    "url": "https://davidneurieder.github.io/openhil/",
+    "description": "Deterministic embedded CAN testing: run YAML test suites against host-compiled firmware (SIL), a virtual network, or a real bus over SocketCAN.",
+    "url": "https://davidneurieder.github.io/embrig/",
     "softwareVersion": "0.1.0",
     "license": "https://www.gnu.org/licenses/agpl-3.0.html",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
@@ -33,16 +33,16 @@
 <body>
   <header class="hero">
     <div class="container">
-      <div class="logo" role="img" aria-label="OpenHIL logo">
+      <div class="logo" role="img" aria-label="Embrig logo">
         <i class="node a"></i>
         <i class="node b"></i>
       </div>
       <span class="eyebrow">Rust · CAN · Deterministic</span>
-      <h1>OpenHIL</h1>
-      <p class="lead">Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run the <strong>same suite</strong> against a deterministic virtual simulation on your laptop or a real bus over SocketCAN.</p>
+      <h1>Embrig</h1>
+      <p class="lead">Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run the <strong>same suite</strong> against host-compiled firmware (SIL), a deterministic virtual simulation on your laptop, or a real bus over SocketCAN.</p>
       <div class="cta">
         <a class="btn btn-primary" href="#get-started">Get started</a>
-        <a class="btn btn-ghost" href="https://github.com/DavidNeurieder/openhil">View source</a>
+        <a class="btn btn-ghost" href="https://github.com/DavidNeurieder/embrig">View source</a>
       </div>
       <p class="trust">Deterministic · No flaky tests · AGPL-3.0</p>
     </div>
@@ -60,8 +60,8 @@
           </div>
           <div class="card">
             <div class="icon">🔁</div>
-            <h3>One suite, two targets</h3>
-            <p>The same YAML tests drive the virtual simulation on your laptop or a live CAN bus over SocketCAN — without rewriting anything.</p>
+            <h3>One suite, three targets</h3>
+            <p>The same YAML tests drive host-compiled firmware (SIL), the virtual simulation on your laptop, or a live CAN bus over SocketCAN — without rewriting anything.</p>
           </div>
           <div class="card">
             <div class="icon">📐</div>
@@ -101,12 +101,19 @@
           <div class="step">
             <span class="num">2</span>
             <div>
-              <h3>Run them on a virtual network</h3>
-              <p>A deterministic simulator of your network — nodes defined in YAML or Rust — runs on any laptop. The bundle includes an EV powertrain demo: inject overvoltage, brake presses, dropped frames.</p>
+              <h3>Run them against your real firmware (SIL)</h3>
+              <p>Host-compiled firmware implementing the <code>Ecu</code> trait runs on the virtual bus. Each simulated step has a wall-clock budget (default 100 ms) — an overrun fails the test instead of hanging it.</p>
             </div>
           </div>
           <div class="step">
             <span class="num">3</span>
+            <div>
+              <h3>Or on a virtual network</h3>
+              <p>A deterministic simulator of your network — nodes defined in YAML or Rust — runs on any laptop. The bundle includes an EV powertrain demo: inject overvoltage, brake presses, dropped frames.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="num">4</span>
             <div>
               <h3>Re-run against real hardware</h3>
               <p>The identical suite drives a physical ECU over SocketCAN. No router in the loop: <code>set_signal</code> and <code>fault</code> are rejected with a clear error, not silently ignored.</p>
@@ -121,8 +128,8 @@
         <h2>See it in action</h2>
         <div class="term-grid">
           <div class="terminal">
-            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">openhil test examples/ev-powertrain/vehicle.yaml</span></div>
-            <pre><span class="t-dim">$ openhil test examples/ev-powertrain/vehicle.yaml</span>
+            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">embrig test examples/ev-powertrain/vehicle.yaml</span></div>
+            <pre><span class="t-dim">$ embrig test examples/ev-powertrain/vehicle.yaml</span>
 <span class="t-pass">PASS</span>  brake_press_disables_motor           <span class="t-dim">(360 ms)</span>
 <span class="t-pass">PASS</span>  bus_carries_periodic_frames           <span class="t-dim">(230 ms)</span>
 <span class="t-pass">PASS</span>  charger_faults_on_stale_battery       <span class="t-dim">(910 ms)</span>
@@ -133,8 +140,8 @@
           </div>
 
           <div class="terminal">
-            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">openhil simulate vehicle.yaml --duration 600ms --verbose</span></div>
-            <pre><span class="t-dim">$ openhil simulate examples/ev-powertrain/vehicle.yaml --duration 600ms --verbose</span>
+            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">embrig simulate vehicle.yaml --duration 600ms --verbose</span></div>
+            <pre><span class="t-dim">$ embrig simulate examples/ev-powertrain/vehicle.yaml --duration 600ms --verbose</span>
 
            0 0x100  [8] A0 0F 00 00 5A 02 01 00
            0 0x110  [8] 00 00 00 00 00 00 00 00
@@ -151,7 +158,7 @@
           <div class="terminal">
             <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">a change flips exactly the right test</span></div>
             <pre><span class="t-dim"># bump the VCU overvoltage threshold from 450 V to 460 V in vehicle.yaml</span>
-<span class="t-dim">$ openhil test examples/ev-powertrain/vehicle.yaml</span>
+<span class="t-dim">$ embrig test examples/ev-powertrain/vehicle.yaml</span>
 
 <span class="t-pass">PASS</span>  brake_press_disables_motor           <span class="t-dim">(360 ms)</span>
 <span class="t-pass">PASS</span>  bus_carries_periodic_frames           <span class="t-dim">(230 ms)</span>
@@ -173,16 +180,20 @@
         <p class="center">A Rust workspace — clone, build, and run the example suite. No CAN hardware needed to start.</p>
         <div class="centered-code">
           <pre class="code-block"><code># Run the example EV powertrain suite (virtual, no hardware needed)
-cargo run --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+cargo run --bin embrig -- test examples/ev-powertrain/vehicle.yaml
 # → 5 passed, 0 failed
 
+# Software-in-the-loop: your firmware on the virtual bus
+cargo run --example sil_firmware --package embrig-sil
+# → 2 passed, 0 failed
+
 # Scaffold your own project
-cargo run --bin openhil -- init my-project
-cargo run --bin openhil -- test my-project/vehicle.yaml
+cargo run --bin embrig -- init my-project
+cargo run --bin embrig -- test my-project/vehicle.yaml
 
 # Drive a real CAN bus (build with the socketcan feature)
 cargo build --features socketcan
-cargo run --features socketcan --bin openhil -- \
+cargo run --features socketcan --bin embrig -- \
   test my-project/vehicle.yaml --interface vcan0</code></pre>
         </div>
 
@@ -197,13 +208,14 @@ steps:
   - expect: { id: 0x230, signal: state, equals: "SAFE", within: 1s }</code></pre>
         </div>
 
-        <p class="note">The same file runs in the simulator and on the bus. Over 450&nbsp;V the VCU refuses to enable the motor — a PASS→FAIL flip proves the ECU behaves, not the runner.</p>
+        <p class="note">The same file runs in the simulator, against SIL firmware, and on the bus. Over 450&nbsp;V the VCU refuses to enable the motor — a PASS→FAIL flip proves the ECU behaves, not the runner.</p>
 
         <h3 class="center">Development</h3>
         <div class="centered-code">
           <pre class="code-block"><code>cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --features socketcan   # 83 tests, incl. 9 CLI black-box
+cargo test --workspace --features socketcan   # 91 tests, incl. 10 CLI black-box
+cargo run --example sil_firmware --package embrig-sil
 scripts/vcan-smoke.sh           # optional: exercise the real SocketCAN path on vcan0</code></pre>
         </div>
       </div>
@@ -212,7 +224,7 @@ scripts/vcan-smoke.sh           # optional: exercise the real SocketCAN path on 
 
   <footer>
     <div class="container">
-      <p>OpenHIL — version 0.1.0 · AGPL-3.0-or-later — <a href="https://github.com/DavidNeurieder/openhil/blob/main/LICENSE">License</a> · <a href="https://github.com/DavidNeurieder/openhil/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/DavidNeurieder/openhil">Source</a></p>
+      <p>Embrig — version 0.1.0 · AGPL-3.0-or-later — <a href="https://github.com/DavidNeurieder/embrig/blob/main/LICENSE">License</a> · <a href="https://github.com/DavidNeurieder/embrig/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/DavidNeurieder/embrig">Source</a></p>
     </div>
   </footer>
 </body>
