@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     fails with a clear "no firmware registered" error.
   - **`crates/embrig-sil/examples/`** — thermal-controller demo (fixtures +
     suites + `sil_firmware` example) that passes `2/2`.
+  - **`crates/embrig-sil/examples/robot/`** — robotics demo: a
+    differential-drive rover whose motion controller is SIL firmware, with
+    suites for driving on joystick command, e-stop halt, e-stop-release
+    resume, and over-speed refusal (`robot_sil` example, passes `4/4`).
   - CLI: `--interface sil` exits 2 with guidance to use `embrig-sil`.
   - Tests: 6 SIL unit tests (suite pass, budget overrun, SUT rejection, faults,
     factory re-run on reset, unknown-registry error) + 1 CLI test.

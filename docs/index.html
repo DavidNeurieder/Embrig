@@ -187,6 +187,10 @@ cargo run --bin embrig -- test examples/ev-powertrain/vehicle.yaml
 cargo run --example sil_firmware --package embrig-sil
 # → 2 passed, 0 failed
 
+# … or a diff-drive rover: drive, e-stop, over-speed fail-safe
+cargo run --example robot_sil --package embrig-sil
+# → 4 passed, 0 failed
+
 # Scaffold your own project
 cargo run --bin embrig -- init my-project
 cargo run --bin embrig -- test my-project/vehicle.yaml
@@ -216,6 +220,7 @@ steps:
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --features socketcan   # 91 tests, incl. 10 CLI black-box
 cargo run --example sil_firmware --package embrig-sil
+cargo run --example robot_sil --package embrig-sil
 scripts/vcan-smoke.sh           # optional: exercise the real SocketCAN path on vcan0</code></pre>
         </div>
       </div>

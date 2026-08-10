@@ -1,0 +1,10 @@
+# Pressing the e-stop halts the rover even while it is being commanded.
+name: estop_stops_the_moving_rover
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - set_signal: { ecu: joystick, id: 0x100, signal: speed, value: 1.0 }
+  - expect: { id: 0x300, signal: state, equals: "DRIVING", within: 1s }
+  - set_signal: { ecu: e-stop, id: 0x110, signal: estop, value: true }
+  - expect: { id: 0x300, signal: state, equals: "ESTOP", within: 1s }
+  - expect: { id: 0x200, signal: left_speed, equals: 0.0, within: 1s }

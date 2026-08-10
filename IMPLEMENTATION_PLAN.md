@@ -34,7 +34,8 @@ crates/
   embrig-cli      binary `embrig`: init / simulate / test / report.
                    clap + anyhow. #[tokio::main].
 examples/ev-powertrain  vehicle.yaml, powertrain.dbc, tests/*.yaml, README.md (student BOM)
-examples/sil (crates/embrig-sil/examples)  thermal-controller: fixtures, suites, sil_firmware.rs
+examples/sil (crates/embrig-sil/examples)  thermal-controller (sil_firmware.rs)
+  + diff-drive rover (robot_sil.rs): fixtures, suites, firmware
 .github/workflows/ci.yml
 ```
 

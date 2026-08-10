@@ -1,0 +1,35 @@
+# Software-in-the-loop diff-drive rover: the `motion` ECU is host-compiled
+# firmware (`type: sil`), bound in code through the SIL registry.
+name: diff-drive-rover
+dbc: robot.dbc
+step_us: 1000
+
+ecus:
+  # Static nodes: the test runner overrides their signals to inject stimulus.
+  - name: joystick
+    type: config
+    message: DriveCommand
+    period_us: 100000
+    signals:
+      speed: 0.0
+      steer: 0.0
+
+  - name: e-stop
+    type: config
+    message: EStop
+    period_us: 100000
+    signals:
+      estop: false
+
+  # The ECU under test: firmware compiled for the host.
+  - name: motion
+    type: sil
+    period_us: 50000
+    listen: [0x100, 0x110]
+    step_budget_us: 100000
+
+interfaces:
+  - name: virtual
+    type: virtual
+  - name: sil
+    type: sil

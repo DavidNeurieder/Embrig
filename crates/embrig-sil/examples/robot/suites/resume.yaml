@@ -1,0 +1,12 @@
+# Releasing the e-stop lets the rover resume driving.
+name: estop_release_resumes_driving
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - set_signal: { ecu: joystick, id: 0x100, signal: speed, value: 1.0 }
+  - expect: { id: 0x300, signal: state, equals: "DRIVING", within: 1s }
+  - set_signal: { ecu: e-stop, id: 0x110, signal: estop, value: true }
+  - expect: { id: 0x300, signal: state, equals: "ESTOP", within: 1s }
+  - set_signal: { ecu: e-stop, id: 0x110, signal: estop, value: false }
+  - expect: { id: 0x300, signal: state, equals: "DRIVING", within: 1s }
+  - expect: { id: 0x200, signal: right_speed, equals: 1.0, within: 1s }

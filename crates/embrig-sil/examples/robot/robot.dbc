@@ -1,0 +1,23 @@
+VERSION "0.1"
+
+NS_ :
+
+BS_:
+
+BU_: Vector__XXX
+
+BO_ 256 DriveCommand: 8 Vector__XXX
+ SG_ speed : 0|16@1- (0.01,0) [-5|5] "m/s"  Vector__XXX
+ SG_ steer : 16|16@1- (0.01,0) [-1|1] ""  Vector__XXX
+
+BO_ 272 EStop: 8 Vector__XXX
+ SG_ estop : 0|1@1+ (1,0) [0|1] ""  Vector__XXX
+
+BO_ 512 MotorCommand: 8 Vector__XXX
+ SG_ left_speed : 0|16@1- (0.01,0) [-3|3] "m/s"  Vector__XXX
+ SG_ right_speed : 16|16@1- (0.01,0) [-3|3] "m/s"  Vector__XXX
+
+BO_ 768 RobotStatus: 8 Vector__XXX
+ SG_ state : 0|8@1+ (1,0) [0|4] ""  Vector__XXX
+
+VAL_ 768 state 0 "OFF" 1 "READY" 2 "DRIVING" 3 "ESTOP" 4 "FAULT" ;

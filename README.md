@@ -108,6 +108,16 @@ registry.register("controller", |_, _| Ok(Box::new(ControllerFirmware::new())));
 let result = sil_run(&config, &dbc, registry, &suites)?;
 ```
 
+A second example applies the same pattern to robotics — a differential-drive
+rover whose motion controller is SIL firmware (`crates/embrig-sil/examples/robot/`):
+
+```sh
+cargo run --example robot_sil --package embrig-sil
+```
+
+→ `4 passed, 0 failed`: joystick commands drive the wheels, the e-stop halts
+(and releasing it resumes), and commands above the 1.5 m/s limit are refused.
+
 ### Example: EV powertrain
 
 `examples/ev-powertrain/` is an included demo you can build on: a virtual EV
@@ -123,6 +133,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --features socketcan -- -D warnings
 cargo test --workspace --features socketcan
 cargo run --example sil_firmware --package embrig-sil
+cargo run --example robot_sil --package embrig-sil
 ```
 
 If you have a real or virtual CAN device:
