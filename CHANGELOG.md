@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CLI: `--interface sil` exits 2 with guidance to use `embrig-sil`.
   - Tests: 6 SIL unit tests (suite pass, budget overrun, SUT rejection, faults,
     factory re-run on reset, unknown-registry error) + 1 CLI test.
+  - **Guides** — `how_to/how-to-sil-test.md` (wrap existing Rust firmware as the
+    system under test) and `how_to/how-to-hil-test.md` (run the same suites
+    against a real ECU over SocketCAN), linked from the README and the website.
 
 ### Changed
 

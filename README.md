@@ -126,6 +126,18 @@ and a step-by-step walkthrough. See `examples/ev-powertrain/README.md` for the
 student walkthrough and a bill of materials (~€0 software, ~€15–30 with one
 real STM32 ECU).
 
+## Guides
+
+Step-by-step walkthroughs for testing an existing embedded system:
+
+- [`how_to/how-to-sil-test.md`](how_to/how-to-sil-test.md) — run your Rust
+  firmware as the system under test on the virtual bus: DBC + `vehicle.yaml`,
+  wrapping the firmware in the `Ecu` trait, YAML suites, `SilRegistry` +
+  `sil_run`.
+- [`how_to/how-to-hil-test.md`](how_to/how-to-hil-test.md) — run the same
+  suites against a real ECU on a real CAN bus: SocketCAN build, hardware
+  bring-up, `send`-based stimulus, loopback sanity check, caveats.
+
 ## Development
 
 ```sh
