@@ -51,7 +51,7 @@ use embrig_core::simulation::Simulation;
 use embrig_core::time::Timestamp;
 use embrig_dbc::Network;
 use embrig_models::{build_simulation_indexed_with, EcuFactory, ModelError, VehicleConfig};
-use embrig_test::target::POLL_US;
+use embrig_test::target::{BoxFut, CanLink, NetmapLink, POLL_US};
 use embrig_test::{run_suite, SuiteResult, TargetError, TestError, TestTarget};
 use thiserror::Error;
 
@@ -248,21 +248,9 @@ impl SilTarget {
     }
 }
 
-impl TestTarget for SilTarget {
+impl CanLink for SilTarget {
     fn network(&self) -> &Network {
         &self.network
-    }
-
-    fn elapsed_us(&self) -> Timestamp {
-        self.sim.time()
-    }
-
-    fn reset(&mut self) -> Result<(), TargetError> {
-        let built = build_simulation_indexed_with(&self.config, &self.dbc, &self.registry)
-            .map_err(|e| TargetError::Can(e.to_string()))?;
-        self.sim = built.sim;
-        self.ecus = built.ecus.into_iter().collect();
-        Ok(())
     }
 
     fn set_signal(
@@ -299,19 +287,41 @@ impl TestTarget for SilTarget {
         Ok(())
     }
 
-    async fn send(&mut self, frame: CanFrame) -> Result<(), TargetError> {
-        self.run_sim(|sim| sim.inject(frame))?;
+    fn send(&mut self, frame: CanFrame) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.run_sim(|sim| sim.inject(frame))?;
+            Ok(())
+        })
+    }
+
+    fn poll(&mut self, id: u32) -> BoxFut<'_, Result<Option<CanFrame>, TargetError>> {
+        Box::pin(async move {
+            self.run_sim(|sim| sim.run_for(POLL_US))?;
+            Ok(self.sim.recorder().last_frame(id).cloned())
+        })
+    }
+}
+
+impl NetmapLink for SilTarget {}
+
+impl TestTarget for SilTarget {
+    fn elapsed_us(&self) -> Timestamp {
+        self.sim.time()
+    }
+
+    fn reset(&mut self) -> Result<(), TargetError> {
+        let built = build_simulation_indexed_with(&self.config, &self.dbc, &self.registry)
+            .map_err(|e| TargetError::Can(e.to_string()))?;
+        self.sim = built.sim;
+        self.ecus = built.ecus.into_iter().collect();
         Ok(())
     }
 
-    async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
-        self.run_sim(|sim| sim.run_for(duration))?;
-        Ok(())
-    }
-
-    async fn poll(&mut self, id: u32) -> Result<Option<CanFrame>, TargetError> {
-        self.run_sim(|sim| sim.run_for(POLL_US))?;
-        Ok(self.sim.recorder().last_frame(id).cloned())
+    fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.run_sim(|sim| sim.run_for(duration))?;
+            Ok(())
+        })
     }
 }
 
@@ -555,7 +565,7 @@ interfaces:
     async fn faults_can_be_injected_on_the_sil_bus() {
         let mut target = SilTarget::new(&config(), &vehicle_dbc(), registry()).unwrap();
         target
-            .add_fault(Fault::DropFrame { id: 0x200 }, Some(0), Some(500_000))
+            .add_can_fault(Fault::DropFrame { id: 0x200 }, Some(0), Some(500_000))
             .unwrap();
         target.wait(300_000).await.unwrap();
         assert!(

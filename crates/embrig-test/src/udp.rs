@@ -24,7 +24,7 @@ use embrig_models::{EthEcuKind, NetworkConfig, SignalLiteral, VehicleConfig};
 use embrig_net::{Netmap, UdpDatagram, UdpEcuFactory, UdpFault, UdpFaultRule, UdpRegistry, UdpSim};
 use thiserror::Error;
 
-use crate::target::{TargetError, TestTarget, POLL_US};
+use crate::target::{BoxFut, CanLink, NetmapLink, TargetError, TestTarget, POLL_US};
 use crate::{run_suite, SuiteResult, TestError};
 
 /// Errors from the UDP toolchain.
@@ -189,83 +189,36 @@ impl UdpTarget {
     }
 }
 
-impl TestTarget for UdpTarget {
+impl CanLink for UdpTarget {
     fn network(&self) -> &Network {
         &self.network
     }
+}
 
-    fn elapsed_us(&self) -> Timestamp {
-        self.sim.time()
-    }
-
-    fn reset(&mut self) -> Result<(), TargetError> {
-        let netmap = load_netmap(&self.netmap_path)?;
-        let built = build_udp_simulation(&self.config, &self.net_config, &netmap)?;
-        self.netmap = netmap;
-        self.sim = built.sim;
-        self.ecus = built.ecus.into_iter().collect();
-        Ok(())
-    }
-
-    fn set_signal(
-        &mut self,
-        _ecu: &str,
-        _id: u32,
-        _signal: &str,
-        _value: SignalValue,
-    ) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "set_signal is a CAN step; use set_field for UDP".into(),
-        ))
-    }
-
-    fn add_fault(
-        &mut self,
-        _fault: embrig_core::fault::Fault,
-        _start: Option<Timestamp>,
-        _duration: Option<Timestamp>,
-    ) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "add_fault is a CAN step; use add_fault_udp for UDP".into(),
-        ))
-    }
-
-    async fn send(&mut self, _frame: embrig_core::frame::CanFrame) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "send is a CAN step; use send_udp for UDP".into(),
-        ))
-    }
-
-    async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
-        self.sim.run_for(duration);
-        Ok(())
-    }
-
-    async fn poll(
-        &mut self,
-        _id: u32,
-    ) -> Result<Option<embrig_core::frame::CanFrame>, TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "poll is a CAN step; use poll_udp for UDP".into(),
-        ))
-    }
-
+impl NetmapLink for UdpTarget {
     fn netmap(&self) -> Option<&Netmap> {
         Some(&self.netmap)
     }
 
-    fn udp_host(&self) -> Result<SocketAddr, TargetError> {
+    fn host(&self) -> Result<SocketAddr, TargetError> {
         Ok(self.host)
     }
 
-    async fn send_udp(&mut self, dg: UdpDatagram) -> Result<(), TargetError> {
-        self.sim.inject(dg);
-        Ok(())
+    fn send_msg(&mut self, dg: UdpDatagram) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.sim.inject(dg);
+            Ok(())
+        })
     }
 
-    async fn poll_udp(&mut self, dst: SocketAddr) -> Result<Option<UdpDatagram>, TargetError> {
-        self.sim.run_for(POLL_US);
-        Ok(self.sim.recorder().last_datagram(dst).cloned())
+    fn poll_msg(
+        &mut self,
+        dst: SocketAddr,
+    ) -> BoxFut<'_, Result<Option<UdpDatagram>, TargetError>> {
+        Box::pin(async move {
+            self.sim.run_for(POLL_US);
+            Ok(self.sim.recorder().last_datagram(dst).cloned())
+        })
     }
 
     fn set_field(
@@ -284,7 +237,7 @@ impl TestTarget for UdpTarget {
             .map_err(|e| TargetError::Net(e.to_string()))
     }
 
-    fn add_fault_udp(
+    fn add_fault(
         &mut self,
         fault: UdpFault,
         start: Option<Timestamp>,
@@ -296,6 +249,28 @@ impl TestTarget for UdpTarget {
             duration,
         });
         Ok(())
+    }
+}
+
+impl TestTarget for UdpTarget {
+    fn elapsed_us(&self) -> Timestamp {
+        self.sim.time()
+    }
+
+    fn reset(&mut self) -> Result<(), TargetError> {
+        let netmap = load_netmap(&self.netmap_path)?;
+        let built = build_udp_simulation(&self.config, &self.net_config, &netmap)?;
+        self.netmap = netmap;
+        self.sim = built.sim;
+        self.ecus = built.ecus.into_iter().collect();
+        Ok(())
+    }
+
+    fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.sim.run_for(duration);
+            Ok(())
+        })
     }
 }
 
@@ -373,84 +348,36 @@ impl UdpSutTarget {
     }
 }
 
-impl TestTarget for UdpSutTarget {
+impl CanLink for UdpSutTarget {
     fn network(&self) -> &Network {
         &self.network
     }
+}
 
-    fn elapsed_us(&self) -> Timestamp {
-        self.sim.time()
-    }
-
-    fn reset(&mut self) -> Result<(), TargetError> {
-        let netmap = load_netmap(&self.netmap_path)?;
-        let built =
-            build_udp_simulation_with(&self.config, &self.net_config, &netmap, &self.registry)?;
-        self.netmap = netmap;
-        self.sim = built.sim;
-        self.ecus = built.ecus.into_iter().collect();
-        Ok(())
-    }
-
-    fn set_signal(
-        &mut self,
-        _ecu: &str,
-        _id: u32,
-        _signal: &str,
-        _value: SignalValue,
-    ) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "set_signal is a CAN step; use set_field for UDP".into(),
-        ))
-    }
-
-    fn add_fault(
-        &mut self,
-        _fault: embrig_core::fault::Fault,
-        _start: Option<Timestamp>,
-        _duration: Option<Timestamp>,
-    ) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "add_fault is a CAN step; use add_fault_udp for UDP".into(),
-        ))
-    }
-
-    async fn send(&mut self, _frame: embrig_core::frame::CanFrame) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "send is a CAN step; use send_udp for UDP".into(),
-        ))
-    }
-
-    async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
-        self.run_sim(|sim| sim.run_for(duration))?;
-        Ok(())
-    }
-
-    async fn poll(
-        &mut self,
-        _id: u32,
-    ) -> Result<Option<embrig_core::frame::CanFrame>, TargetError> {
-        Err(TargetError::UnsupportedOnTarget(
-            "poll is a CAN step; use poll_udp for UDP".into(),
-        ))
-    }
-
+impl NetmapLink for UdpSutTarget {
     fn netmap(&self) -> Option<&Netmap> {
         Some(&self.netmap)
     }
 
-    fn udp_host(&self) -> Result<SocketAddr, TargetError> {
+    fn host(&self) -> Result<SocketAddr, TargetError> {
         Ok(self.host)
     }
 
-    async fn send_udp(&mut self, dg: UdpDatagram) -> Result<(), TargetError> {
-        self.run_sim(|sim| sim.inject(dg))?;
-        Ok(())
+    fn send_msg(&mut self, dg: UdpDatagram) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.run_sim(|sim| sim.inject(dg))?;
+            Ok(())
+        })
     }
 
-    async fn poll_udp(&mut self, dst: SocketAddr) -> Result<Option<UdpDatagram>, TargetError> {
-        self.run_sim(|sim| sim.run_for(POLL_US))?;
-        Ok(self.sim.recorder().last_datagram(dst).cloned())
+    fn poll_msg(
+        &mut self,
+        dst: SocketAddr,
+    ) -> BoxFut<'_, Result<Option<UdpDatagram>, TargetError>> {
+        Box::pin(async move {
+            self.run_sim(|sim| sim.run_for(POLL_US))?;
+            Ok(self.sim.recorder().last_datagram(dst).cloned())
+        })
     }
 
     fn set_field(
@@ -473,7 +400,7 @@ impl TestTarget for UdpSutTarget {
             .map_err(|e| TargetError::Net(e.to_string()))
     }
 
-    fn add_fault_udp(
+    fn add_fault(
         &mut self,
         fault: UdpFault,
         start: Option<Timestamp>,
@@ -488,10 +415,33 @@ impl TestTarget for UdpSutTarget {
     }
 }
 
+impl TestTarget for UdpSutTarget {
+    fn elapsed_us(&self) -> Timestamp {
+        self.sim.time()
+    }
+
+    fn reset(&mut self) -> Result<(), TargetError> {
+        let netmap = load_netmap(&self.netmap_path)?;
+        let built =
+            build_udp_simulation_with(&self.config, &self.net_config, &netmap, &self.registry)?;
+        self.netmap = netmap;
+        self.sim = built.sim;
+        self.ecus = built.ecus.into_iter().collect();
+        Ok(())
+    }
+
+    fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.run_sim(|sim| sim.run_for(duration))?;
+            Ok(())
+        })
+    }
+}
+
 /// A [`TestTarget`] talking to a real Ethernet link through a bound UDP socket.
 ///
-/// The socket is bound to the network's host endpoint. `send_udp` transmits a
-/// datagram to its destination; `poll_udp` waits up to a poll interval and
+/// The socket is bound to the network's host endpoint. `send_msg` transmits a
+/// datagram to its destination; `poll_msg` waits up to a poll interval and
 /// returns the first datagram for the requested destination, queueing others
 /// for later polls. `set_field` and faults are unsupported on a live link.
 pub struct UdpHardwareTarget {
@@ -523,101 +473,57 @@ impl UdpHardwareTarget {
     }
 }
 
-impl TestTarget for UdpHardwareTarget {
+impl CanLink for UdpHardwareTarget {
     fn network(&self) -> &Network {
         &self.network
     }
+}
 
-    fn elapsed_us(&self) -> Timestamp {
-        self.started.elapsed().as_micros() as u64
-    }
-
-    fn reset(&mut self) -> Result<(), TargetError> {
-        self.queue.clear();
-        self.started = std::time::Instant::now();
-        Ok(())
-    }
-
-    fn set_signal(
-        &mut self,
-        _ecu: &str,
-        _id: u32,
-        _signal: &str,
-        _value: SignalValue,
-    ) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnHardware(
-            "set_signal cannot inject into a live bus".into(),
-        ))
-    }
-
-    fn add_fault(
-        &mut self,
-        _fault: embrig_core::fault::Fault,
-        _start: Option<Timestamp>,
-        _duration: Option<Timestamp>,
-    ) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnHardware(
-            "faults require the virtual router".into(),
-        ))
-    }
-
-    async fn send(&mut self, _frame: embrig_core::frame::CanFrame) -> Result<(), TargetError> {
-        Err(TargetError::UnsupportedOnHardware(
-            "CAN frames cannot be sent on a UDP link".into(),
-        ))
-    }
-
-    async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
-        tokio::time::sleep(std::time::Duration::from_micros(duration)).await;
-        Ok(())
-    }
-
-    async fn poll(
-        &mut self,
-        _id: u32,
-    ) -> Result<Option<embrig_core::frame::CanFrame>, TargetError> {
-        Err(TargetError::UnsupportedOnHardware(
-            "CAN frames cannot be received on a UDP link".into(),
-        ))
-    }
-
+impl NetmapLink for UdpHardwareTarget {
     fn netmap(&self) -> Option<&Netmap> {
         Some(&self.netmap)
     }
 
-    fn udp_host(&self) -> Result<SocketAddr, TargetError> {
+    fn host(&self) -> Result<SocketAddr, TargetError> {
         Ok(self.host)
     }
 
-    async fn send_udp(&mut self, dg: UdpDatagram) -> Result<(), TargetError> {
-        self.socket
-            .send_to(&dg.payload, dg.dst)
-            .await
-            .map_err(|e| TargetError::Net(format!("cannot send to {}: {e}", dg.dst)))?;
-        Ok(())
+    fn send_msg(&mut self, dg: UdpDatagram) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.socket
+                .send_to(&dg.payload, dg.dst)
+                .await
+                .map_err(|e| TargetError::Net(format!("cannot send to {}: {e}", dg.dst)))?;
+            Ok(())
+        })
     }
 
-    async fn poll_udp(&mut self, dst: SocketAddr) -> Result<Option<UdpDatagram>, TargetError> {
-        let mut buf = [0u8; 65535];
-        let deadline = std::time::Instant::now() + std::time::Duration::from_micros(POLL_US);
-        loop {
-            if let Some(pos) = self.queue.iter().position(|d| d.dst == dst) {
-                return Ok(Some(self.queue.remove(pos).expect("position found")));
-            }
-            let now = std::time::Instant::now();
-            if now >= deadline {
-                return Ok(None);
-            }
-            let remaining = deadline.saturating_duration_since(now);
-            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
-                Ok(Ok((n, src))) => {
-                    self.queue
-                        .push_back(UdpDatagram::new(src, self.host, buf[..n].to_vec()));
+    fn poll_msg(
+        &mut self,
+        dst: SocketAddr,
+    ) -> BoxFut<'_, Result<Option<UdpDatagram>, TargetError>> {
+        Box::pin(async move {
+            let mut buf = [0u8; 65535];
+            let deadline = std::time::Instant::now() + std::time::Duration::from_micros(POLL_US);
+            loop {
+                if let Some(pos) = self.queue.iter().position(|d| d.dst == dst) {
+                    return Ok(Some(self.queue.remove(pos).expect("position found")));
                 }
-                Ok(Err(e)) => return Err(TargetError::Net(format!("cannot receive: {e}"))),
-                Err(_) => return Ok(None),
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    return Ok(None);
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
+                    Ok(Ok((n, src))) => {
+                        self.queue
+                            .push_back(UdpDatagram::new(src, self.host, buf[..n].to_vec()));
+                    }
+                    Ok(Err(e)) => return Err(TargetError::Net(format!("cannot receive: {e}"))),
+                    Err(_) => return Ok(None),
+                }
             }
-        }
+        })
     }
 
     fn set_field(
@@ -632,7 +538,7 @@ impl TestTarget for UdpHardwareTarget {
         ))
     }
 
-    fn add_fault_udp(
+    fn add_fault(
         &mut self,
         _fault: UdpFault,
         _start: Option<Timestamp>,
@@ -641,6 +547,25 @@ impl TestTarget for UdpHardwareTarget {
         Err(TargetError::UnsupportedOnHardware(
             "faults require the virtual router".into(),
         ))
+    }
+}
+
+impl TestTarget for UdpHardwareTarget {
+    fn elapsed_us(&self) -> Timestamp {
+        self.started.elapsed().as_micros() as u64
+    }
+
+    fn reset(&mut self) -> Result<(), TargetError> {
+        self.queue.clear();
+        self.started = std::time::Instant::now();
+        Ok(())
+    }
+
+    fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_micros(duration)).await;
+            Ok(())
+        })
     }
 }
 
@@ -789,7 +714,7 @@ interfaces:
 
         // Telemetry is periodic: the config motion ECU transmits every 50ms.
         target.wait(110_000).await.unwrap();
-        let telemetry = target.poll_udp(host).await.unwrap().unwrap();
+        let telemetry = target.poll_msg(host).await.unwrap().unwrap();
         assert_eq!(telemetry.dst, host);
         let speed = target
             .netmap()
@@ -811,10 +736,10 @@ interfaces:
             .encode_fields(&[("forward", SignalValue::Num(2.0))])
             .unwrap();
         target
-            .send_udp(UdpDatagram::new(host, motion, payload))
+            .send_msg(UdpDatagram::new(host, motion, payload))
             .await
             .unwrap();
-        assert!(target.poll_udp(motion).await.unwrap().is_some());
+        assert!(target.poll_msg(motion).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -825,7 +750,7 @@ interfaces:
             .set_field("motion", "MotionState", "speed", SignalValue::Num(3.5))
             .unwrap();
         target.wait(60_000).await.unwrap();
-        let telemetry = target.poll_udp(host).await.unwrap().unwrap();
+        let telemetry = target.poll_msg(host).await.unwrap().unwrap();
         let speed = target
             .netmap()
             .unwrap()
@@ -1025,7 +950,7 @@ interfaces:
         let netmap: Netmap = serde_saphyr::from_str(NETMAP).unwrap();
         let host: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let mut target = UdpHardwareTarget::new(host, netmap).await.unwrap();
-        let actual_host = target.udp_host().unwrap();
+        let actual_host = target.host().unwrap();
         let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let client_addr = client.local_addr().unwrap();
 
@@ -1033,7 +958,7 @@ interfaces:
         let payload = vec![1, 2, 3, 4];
         client.send_to(&payload, actual_host).await.unwrap();
         let dg = target
-            .poll_udp(actual_host)
+            .poll_msg(actual_host)
             .await
             .unwrap()
             .expect("datagram from client");
@@ -1043,7 +968,7 @@ interfaces:
         // Host -> client.
         let reply = vec![5, 6];
         target
-            .send_udp(UdpDatagram::new(actual_host, client_addr, reply.clone()))
+            .send_msg(UdpDatagram::new(actual_host, client_addr, reply.clone()))
             .await
             .unwrap();
         let mut buf = [0u8; 64];

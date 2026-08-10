@@ -157,26 +157,28 @@ async fn cmd_test(
     };
     let label = vehicle.display().to_string();
 
-    let target = select_target(&config, &dbc_path, &vehicle_dir, interface)?;
+    let kind = interface_kind(&config, interface)?;
+    if kind == "sil" {
+        bail!(
+            "interface `sil` is software-in-the-loop, which the CLI does not execute; \
+             use the `embrig-sil` crate instead \
+             (`cargo run --example sil_firmware --package embrig-sil`)"
+        );
+    }
 
-    let suite = match target {
-        Target::Virtual(mut target) => {
-            let suite = embrig_test::run_suite(&mut *target, &files, &label).await?;
-            print_suite(&suite);
-            suite
-        }
-        Target::Udp(mut target) => {
-            let suite = embrig_test::run_suite(&mut *target, &files, &label).await?;
-            print_suite(&suite);
-            suite
-        }
-        #[cfg(feature = "socketcan")]
-        Target::Hardware(mut target) => {
-            let suite = embrig_test::run_suite(&mut target, &files, &label).await?;
-            print_suite(&suite);
-            suite
-        }
+    let input = embrig_test::ProtocolInput {
+        config: &config,
+        dbc_path: &dbc_path,
+        vehicle_dir: &vehicle_dir,
+        interface,
     };
+    let registry = embrig_test::ProtocolRegistry::default();
+    let mut target = registry
+        .build(&kind, &input)
+        .with_context(|| format!("cannot build `{kind}` target"))?;
+
+    let suite = embrig_test::run_suite(&mut *target, &files, &label).await?;
+    print_suite(&suite);
 
     if let Some(report_path) = report {
         embrig_test::write_report(report_path, &suite, report_format)
@@ -185,6 +187,19 @@ async fn cmd_test(
     }
 
     Ok(if suite.failed() > 0 { 1 } else { 0 })
+}
+
+/// Resolve the interface kind from the CLI flag (or the virtual default).
+fn interface_kind(config: &VehicleConfig, interface: Option<&str>) -> Result<String> {
+    match interface {
+        None => Ok("virtual".to_string()),
+        Some(name) => config
+            .interfaces
+            .iter()
+            .find(|i| i.name == name)
+            .map(|i| i.kind.clone())
+            .ok_or_else(|| anyhow::anyhow!("interface `{name}` not found in vehicle.yaml")),
+    }
 }
 
 fn cmd_report(input: &Path, output: Option<&Path>, format: &str) -> Result<i32> {
@@ -202,97 +217,6 @@ fn cmd_report(input: &Path, output: Option<&Path>, format: &str) -> Result<i32> 
         .with_context(|| format!("cannot write report `{}`", output.display()))?;
     println!("report written to {}", output.display());
     Ok(0)
-}
-
-/// The target a test suite runs against.
-enum Target {
-    Virtual(Box<embrig_test::VirtualTarget>),
-    Udp(Box<embrig_test::UdpTarget>),
-    #[cfg(feature = "socketcan")]
-    Hardware(embrig_test::target::HardwareTarget),
-}
-
-fn select_target(
-    config: &VehicleConfig,
-    dbc_path: &Path,
-    vehicle_dir: &Path,
-    interface: Option<&str>,
-) -> Result<Target> {
-    let kind = match interface {
-        None => "virtual".to_string(),
-        Some(name) => config
-            .interfaces
-            .iter()
-            .find(|i| i.name == name)
-            .map(|i| i.kind.clone())
-            .ok_or_else(|| anyhow::anyhow!("interface `{name}` not found in vehicle.yaml"))?,
-    };
-
-    match kind.as_str() {
-        "virtual" => {
-            let target = embrig_test::VirtualTarget::new(config, dbc_path).with_context(|| {
-                format!(
-                    "cannot build virtual simulation from `{}`",
-                    dbc_path.display()
-                )
-            })?;
-            Ok(Target::Virtual(Box::new(target)))
-        }
-        "udp" => {
-            let net_config = config
-                .networks
-                .iter()
-                .find(|n| n.kind == "udp")
-                .ok_or_else(|| anyhow::anyhow!("vehicle.yaml has no network of type `udp`"))?;
-            let netmap_path = vehicle_dir.join(&net_config.netmap);
-            if !netmap_path.exists() {
-                bail!("netmap file `{}` not found", netmap_path.display());
-            }
-            let target = embrig_test::UdpTarget::new(config, net_config, &netmap_path)
-                .with_context(|| {
-                    format!(
-                        "cannot build UDP simulation from `{}`",
-                        netmap_path.display()
-                    )
-                })?;
-            Ok(Target::Udp(Box::new(target)))
-        }
-        "socketcan" => {
-            #[cfg(feature = "socketcan")]
-            {
-                let iface_name = interface
-                    .and_then(|name| {
-                        config
-                            .interfaces
-                            .iter()
-                            .find(|i| i.name == name)
-                            .and_then(|i| i.interface.clone())
-                    })
-                    .unwrap_or_else(|| "vcan0".to_string());
-                let text = fs::read_to_string(dbc_path)
-                    .with_context(|| format!("cannot read `{}`", dbc_path.display()))?;
-                let network = embrig_dbc::parse(&text)
-                    .with_context(|| format!("invalid DBC `{}`", dbc_path.display()))?;
-                let target = embrig_test::target::HardwareTarget::new(&iface_name, network)
-                    .with_context(|| format!("cannot open CAN interface `{iface_name}`"))?;
-                Ok(Target::Hardware(target))
-            }
-            #[cfg(not(feature = "socketcan"))]
-            {
-                let _ = config;
-                bail!("this build has no socketcan support; rebuild with `--features socketcan`")
-            }
-        }
-        "sil" => {
-            bail!(
-                "interface `{}` is software-in-the-loop, which the CLI does not execute; \
-                 use the `embrig-sil` crate instead \
-                 (`cargo run --example sil_firmware --package embrig-sil`)",
-                interface.unwrap_or("sil")
-            )
-        }
-        other => bail!("unknown interface type `{other}` (use virtual, udp or socketcan)"),
-    }
 }
 
 /// Expand test inputs (files or directories) into a sorted, deduplicated list.

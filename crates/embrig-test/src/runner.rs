@@ -4,12 +4,14 @@
 //! advances the simulation by a fixed poll interval, so `within` deadlines are
 //! still deterministic; in hardware mode polls are wall-clock waits.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use embrig_core::fault::Fault;
 use embrig_core::frame::CanFrame;
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
-use embrig_dbc::Network;
-use embrig_net::{MessageDef, UdpDatagram, UdpFault};
+use embrig_net::{UdpDatagram, UdpFault};
 use thiserror::Error;
 
 use crate::dsl::{
@@ -43,7 +45,7 @@ impl From<String> for TestError {
 /// `label` is used as the suite display name in reports. The target is reset
 /// before each test so faults, signal overrides and clock state never leak
 /// between tests. Assertion failures stop only the failing test.
-pub async fn run_suite<T: TestTarget>(
+pub async fn run_suite<T: TestTarget + ?Sized>(
     target: &mut T,
     files: &[std::path::PathBuf],
     label: &str,
@@ -65,7 +67,7 @@ pub async fn run_suite<T: TestTarget>(
 
 /// Run one test spec against a target. Assertion failures are recorded inside
 /// the returned [`TestResult`]; infrastructure errors abort the test.
-pub async fn run_spec<T: TestTarget>(
+pub async fn run_spec<T: TestTarget + ?Sized>(
     spec: &TestSpec,
     target: &mut T,
 ) -> Result<TestResult, TestError> {
@@ -116,7 +118,7 @@ pub async fn run_spec<T: TestTarget>(
                     .or(Some(target.elapsed_us()));
                 let duration_us = duration.as_deref().map(parse_duration).transpose()?;
                 target
-                    .add_fault(fault, start_us, duration_us)
+                    .add_can_fault(fault, start_us, duration_us)
                     .map_err(|e| e.to_string())
             }
             Step::SendUdp { message, fields } => {
@@ -133,9 +135,9 @@ pub async fn run_spec<T: TestTarget>(
                 let payload = message_def
                     .encode_fields(&values)
                     .map_err(|e| format!("cannot encode `{message}`: {e}"))?;
-                let src = target.udp_host().map_err(|e| e.to_string())?;
+                let src = target.host().map_err(|e| e.to_string())?;
                 target
-                    .send_udp(UdpDatagram::new(src, message_def.dst, payload))
+                    .send_msg(UdpDatagram::new(src, message_def.dst, payload))
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -171,7 +173,7 @@ pub async fn run_spec<T: TestTarget>(
                     .or(Some(target.elapsed_us()));
                 let duration_us = duration.as_deref().map(parse_duration).transpose()?;
                 target
-                    .add_fault_udp(fault, start_us, duration_us)
+                    .add_netmap_fault(fault, start_us, duration_us)
                     .map_err(|e| e.to_string())
             }
         };
@@ -230,35 +232,131 @@ fn expected_to_signal(value: &ExpectedValue) -> SignalValue {
     }
 }
 
+/// A generic assertion shared by CAN and netmap (UDP/TCP) expect steps. Built
+/// from an [`ExpectStep`] or [`ExpectUdpStep`] at the call site.
+struct Assertion {
+    /// Kind word used in messages: `frame` or `message`.
+    kind: &'static str,
+    /// Display label, e.g. `0x100` or `` `MotionState` ``.
+    label: String,
+    /// Field/signal display name for value assertions.
+    field: String,
+    present: Option<bool>,
+    equals: Option<ExpectedValue>,
+    greater_than: Option<f64>,
+    less_than: Option<f64>,
+}
+
+/// A decoded field/signal value observed on the target.
+#[derive(Debug)]
+struct DecodedValue {
+    value: f64,
+    symbol: Option<String>,
+}
+
+/// What one poll observed for the asserted message (or its absence).
+#[derive(Debug)]
+struct Observed {
+    value: Option<DecodedValue>,
+}
+
+/// Evaluate an assertion against the latest observed message (or its absence).
+fn check_assertion(spec: &Assertion, obs: Option<&Observed>) -> Result<(), String> {
+    if let Some(present) = spec.present {
+        return match (present, obs) {
+            (true, Some(_)) => Ok(()),
+            (false, None) => Ok(()),
+            (true, None) => Err(format!(
+                "expected a {} {} to be present",
+                spec.kind, spec.label
+            )),
+            (false, Some(_)) => unreachable!("absent-with-message is handled by the poll loop"),
+        };
+    }
+
+    let value = obs
+        .and_then(|o| o.value.as_ref())
+        .ok_or_else(|| format!("no {} {} observed", spec.kind, spec.label))?;
+
+    if let Some(expected) = &spec.equals {
+        let pass = match expected {
+            ExpectedValue::Num(v) => (value.value - v).abs() < 1e-6,
+            ExpectedValue::Bool(b) => (value.value > 0.5) == *b,
+            ExpectedValue::Str(s) => value.symbol.as_deref() == Some(s.as_str()),
+        };
+        if !pass {
+            let got = value
+                .symbol
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{}", value.value));
+            return Err(format!(
+                "{}.{} expected {}, got {}",
+                spec.label,
+                spec.field,
+                expected.describe(),
+                got
+            ));
+        }
+    }
+    if let Some(v) = spec.greater_than {
+        if value.value <= v {
+            return Err(format!(
+                "{}.{} expected > {v}, got {}",
+                spec.label, spec.field, value.value
+            ));
+        }
+    }
+    if let Some(v) = spec.less_than {
+        if value.value >= v {
+            return Err(format!(
+                "{}.{} expected < {v}, got {}",
+                spec.label, spec.field, value.value
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Poll an assertion until it holds or its `within` deadline passes. Polling
 /// is capped by the whole-test `test_deadline` so a huge `within` cannot run
-/// a test past its budget.
-async fn evaluate_expect<T: TestTarget>(
-    spec: &ExpectStep,
-    target: &mut T,
+/// a test past its budget. `poll` returns what one poll observed (or its
+/// absence) and is expected to advance time / sleep like the target's poll
+/// methods. An `absent` assertion fails on the first poll that sees a message.
+async fn poll_until<T, F>(
+    spec: &Assertion,
+    within: Option<&str>,
     test_deadline: Timestamp,
-) -> Result<(), String> {
-    let within = match &spec.within {
+    target: &mut T,
+    mut poll: F,
+) -> Result<(), String>
+where
+    T: TestTarget + ?Sized,
+    F: for<'a> FnMut(
+        &'a mut T,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Observed>, String>> + 'a>>,
+{
+    let within_us = match within {
         Some(w) => parse_duration(w).map_err(|e| e.to_string())?,
         None => 0,
     };
-    let expect_deadline = target.elapsed_us().saturating_add(within);
+    let expect_deadline = target.elapsed_us().saturating_add(within_us);
     let deadline = expect_deadline.min(test_deadline);
 
     loop {
-        let frame = target.poll(spec.id).await.map_err(|e| e.to_string())?;
+        let obs = poll(target).await?;
 
-        if spec.effective_present() == Some(false) && frame.is_some() {
+        if spec.present == Some(false) && obs.is_some() {
             return Err(format!(
-                "expected no frame 0x{:03X} but one was observed",
-                spec.id
+                "expected no {} {} but one was observed",
+                spec.kind, spec.label
             ));
         }
 
-        match check(spec, frame.as_ref(), target.network()) {
+        match check_assertion(spec, obs.as_ref()) {
             Ok(()) => return Ok(()),
             Err(message) => {
-                if within == 0 || target.elapsed_us() >= deadline {
+                if within_us == 0 || target.elapsed_us() >= deadline {
                     return Err(message);
                 }
             }
@@ -266,68 +364,59 @@ async fn evaluate_expect<T: TestTarget>(
     }
 }
 
-/// Evaluate an assertion against the latest observed frame (or its absence).
-fn check(spec: &ExpectStep, frame: Option<&CanFrame>, network: &Network) -> Result<(), String> {
-    if let Some(present) = spec.effective_present() {
-        return match (present, frame) {
-            (true, Some(_)) => Ok(()),
-            (false, None) => Ok(()),
-            (true, None) => Err(format!("expected a frame 0x{:03X} to be present", spec.id)),
-            (false, Some(_)) => unreachable!("handled before check"),
-        };
-    }
-
-    let frame = frame.ok_or_else(|| format!("no frame 0x{:03X} observed", spec.id))?;
-    let message = network
-        .message(spec.id)
-        .ok_or_else(|| format!("no message with id 0x{:03X} in DBC", spec.id))?;
-    let signals = message
-        .decode_signals(&frame.data)
-        .map_err(|e| format!("cannot decode 0x{:03X}: {e}", spec.id))?;
-    let signal_name = spec.signal.as_deref().unwrap_or_default();
-    let signal = signals
-        .iter()
-        .find(|s| s.name == signal_name)
-        .ok_or_else(|| format!("unknown signal `{signal_name}` on 0x{:03X}", spec.id))?;
-
-    if let Some(expected) = &spec.equals {
-        let pass = match expected {
-            ExpectedValue::Num(v) => (signal.value - v).abs() < 1e-6,
-            ExpectedValue::Bool(b) => (signal.value > 0.5) == *b,
-            ExpectedValue::Str(s) => signal.symbol.as_deref() == Some(s.as_str()),
-        };
-        if !pass {
-            let got = signal
-                .symbol
-                .as_deref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}", signal.value));
-            return Err(format!(
-                "0x{:03X}.{} expected {}, got {}",
-                spec.id,
-                signal_name,
-                expected.describe(),
-                got
-            ));
-        }
-    }
-    if let Some(v) = spec.greater_than {
-        if signal.value <= v {
-            return Err(format!(
-                "0x{:03X}.{} expected > {v}, got {}",
-                spec.id, signal_name, signal.value
-            ));
-        }
-    }
-    if let Some(v) = spec.less_than {
-        if signal.value >= v {
-            return Err(format!(
-                "0x{:03X}.{} expected < {v}, got {}",
-                spec.id, signal_name, signal.value
-            ));
-        }
-    }
-    Ok(())
+/// Poll a CAN assertion until it holds or its `within` deadline passes.
+async fn evaluate_expect<T: TestTarget + ?Sized>(
+    spec: &ExpectStep,
+    target: &mut T,
+    test_deadline: Timestamp,
+) -> Result<(), String> {
+    let assertion = Assertion {
+        kind: "frame",
+        label: format!("0x{:03X}", spec.id),
+        field: spec.signal.clone().unwrap_or_default(),
+        present: spec.effective_present(),
+        equals: spec.equals.clone(),
+        greater_than: spec.greater_than,
+        less_than: spec.less_than,
+    };
+    let id = spec.id;
+    let signal_name = assertion.field.clone();
+    poll_until(
+        &assertion,
+        spec.within.as_deref(),
+        test_deadline,
+        target,
+        |t| {
+            let signal_name = signal_name.clone();
+            Box::pin(async move {
+                let frame = t.poll(id).await.map_err(|e| e.to_string())?;
+                let value =
+                    match frame {
+                        None => return Ok(None),
+                        Some(_) if signal_name.is_empty() => None,
+                        Some(f) => {
+                            let message = t
+                                .network()
+                                .message(id)
+                                .ok_or_else(|| format!("no message with id 0x{id:03X} in DBC"))?;
+                            let signals = message
+                                .decode_signals(&f.data)
+                                .map_err(|e| format!("cannot decode 0x{id:03X}: {e}"))?;
+                            let signal =
+                                signals.iter().find(|s| s.name == signal_name).ok_or_else(
+                                    || format!("unknown signal `{signal_name}` on 0x{id:03X}"),
+                                )?;
+                            Some(DecodedValue {
+                                value: signal.value,
+                                symbol: signal.symbol.clone(),
+                            })
+                        }
+                    };
+                Ok(Some(Observed { value }))
+            })
+        },
+    )
+    .await
 }
 
 /// Build a [`UdpFault`] from the YAML fault_udp step fields.
@@ -352,9 +441,10 @@ fn udp_fault_from_kind(
     })
 }
 
-/// Poll a UDP assertion until it holds or its `within` deadline passes. The
-/// message's destination endpoint (from the netmap) identifies the traffic.
-async fn evaluate_udp_expect<T: TestTarget>(
+/// Poll a netmap (UDP) assertion until it holds or its `within` deadline
+/// passes. The message's destination endpoint (from the netmap) identifies the
+/// traffic.
+async fn evaluate_udp_expect<T: TestTarget + ?Sized>(
     spec: &ExpectUdpStep,
     target: &mut T,
     test_deadline: Timestamp,
@@ -366,102 +456,54 @@ async fn evaluate_udp_expect<T: TestTarget>(
         .cloned()
         .ok_or_else(|| format!("no message `{}` in netmap", spec.message))?;
     let dst = message.dst;
-
-    let within = match &spec.within {
-        Some(w) => parse_duration(w).map_err(|e| e.to_string())?,
-        None => 0,
+    let assertion = Assertion {
+        kind: "message",
+        label: format!("`{}`", spec.message),
+        field: spec.field.clone().unwrap_or_default(),
+        present: spec.effective_present(),
+        equals: spec.equals.clone(),
+        greater_than: spec.greater_than,
+        less_than: spec.less_than,
     };
-    let expect_deadline = target.elapsed_us().saturating_add(within);
-    let deadline = expect_deadline.min(test_deadline);
-
-    loop {
-        let dg = target.poll_udp(dst).await.map_err(|e| e.to_string())?;
-
-        if spec.effective_present() == Some(false) && dg.is_some() {
-            return Err(format!(
-                "expected no message `{}` but one was observed",
-                spec.message
-            ));
-        }
-
-        match check_udp(spec, dg.as_ref(), &message) {
-            Ok(()) => return Ok(()),
-            Err(message) => {
-                if within == 0 || target.elapsed_us() >= deadline {
-                    return Err(message);
-                }
-            }
-        }
-    }
-}
-
-/// Evaluate a UDP assertion against the latest observed datagram (or its
-/// absence).
-fn check_udp(
-    spec: &ExpectUdpStep,
-    dg: Option<&UdpDatagram>,
-    message: &MessageDef,
-) -> Result<(), String> {
-    if let Some(present) = spec.effective_present() {
-        return match (present, dg) {
-            (true, Some(_)) => Ok(()),
-            (false, None) => Ok(()),
-            (true, None) => Err(format!("expected message `{}` to be present", spec.message)),
-            (false, Some(_)) => unreachable!("handled before check_udp"),
-        };
-    }
-
-    let dg = dg.ok_or_else(|| format!("no message `{}` observed", spec.message))?;
-    let field = spec.field.as_deref().unwrap_or_default();
-    let decoded = message
-        .decode_field(&dg.payload, field)
-        .map_err(|e| format!("cannot decode `{}`: {e}", spec.message))?;
-
-    if let Some(expected) = &spec.equals {
-        let pass = match expected {
-            ExpectedValue::Num(v) => (decoded.value - v).abs() < 1e-6,
-            ExpectedValue::Bool(b) => (decoded.value > 0.5) == *b,
-            ExpectedValue::Str(s) => decoded.symbol.as_deref() == Some(s.as_str()),
-        };
-        if !pass {
-            let got = decoded
-                .symbol
-                .as_deref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}", decoded.value));
-            return Err(format!(
-                "`{}`.{} expected {}, got {}",
-                spec.message,
-                field,
-                expected.describe(),
-                got
-            ));
-        }
-    }
-    if let Some(v) = spec.greater_than {
-        if decoded.value <= v {
-            return Err(format!(
-                "`{}`.{} expected > {v}, got {}",
-                spec.message, field, decoded.value
-            ));
-        }
-    }
-    if let Some(v) = spec.less_than {
-        if decoded.value >= v {
-            return Err(format!(
-                "`{}`.{} expected < {v}, got {}",
-                spec.message, field, decoded.value
-            ));
-        }
-    }
-    Ok(())
+    let message_name = spec.message.clone();
+    let field_name = assertion.field.clone();
+    poll_until(
+        &assertion,
+        spec.within.as_deref(),
+        test_deadline,
+        target,
+        |t| {
+            let message = message.clone();
+            let message_name = message_name.clone();
+            let field_name = field_name.clone();
+            Box::pin(async move {
+                let dg = t.poll_msg(dst).await.map_err(|e| e.to_string())?;
+                let value = match dg {
+                    None => return Ok(None),
+                    Some(_) if field_name.is_empty() => None,
+                    Some(dg) => {
+                        let decoded = message
+                            .decode_field(&dg.payload, &field_name)
+                            .map_err(|e| format!("cannot decode `{message_name}`: {e}"))?;
+                        Some(DecodedValue {
+                            value: decoded.value,
+                            symbol: decoded.symbol,
+                        })
+                    }
+                };
+                Ok(Some(Observed { value }))
+            })
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::target::{TargetError, POLL_US};
+    use crate::target::{BoxFut, CanLink, NetmapLink, TargetError, POLL_US};
     use embrig_core::frame::CanFrame;
+    use embrig_dbc::Network;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
 
@@ -513,138 +555,172 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         frame(0x100, raw)
     }
 
-    fn motor(enabled: bool) -> CanFrame {
-        let n = network();
-        let message = n.message(0x220).unwrap();
-        let raw = message
-            .encode_signals(&[("motor_enable", if enabled { 1.0 } else { 0.0 })])
-            .unwrap();
-        frame(0x220, raw)
+    fn decoded_obs(value: f64, symbol: Option<&str>) -> Observed {
+        Observed {
+            value: Some(DecodedValue {
+                value,
+                symbol: symbol.map(|s| s.to_string()),
+            }),
+        }
+    }
+
+    fn can_assertion(
+        id: u32,
+        signal: &str,
+        present: Option<bool>,
+        equals: Option<ExpectedValue>,
+        greater_than: Option<f64>,
+        less_than: Option<f64>,
+    ) -> Assertion {
+        Assertion {
+            kind: "frame",
+            label: format!("0x{id:03X}"),
+            field: signal.to_string(),
+            present,
+            equals,
+            greater_than,
+            less_than,
+        }
+    }
+
+    /// Decode `frame` into an [`Observed`] exactly like `evaluate_expect` does.
+    fn can_observed(
+        network: &Network,
+        id: u32,
+        signal: &str,
+        frame: Option<&CanFrame>,
+    ) -> Result<Option<Observed>, String> {
+        let frame = match frame {
+            Some(f) => f,
+            None => return Ok(None),
+        };
+        let message = network
+            .message(id)
+            .ok_or_else(|| format!("no message with id 0x{id:03X} in DBC"))?;
+        let signals = message
+            .decode_signals(&frame.data)
+            .map_err(|e| format!("cannot decode 0x{id:03X}: {e}"))?;
+        let signal = signals
+            .iter()
+            .find(|s| s.name == signal)
+            .ok_or_else(|| format!("unknown signal `{signal}` on 0x{id:03X}"))?;
+        Ok(Some(Observed {
+            value: Some(DecodedValue {
+                value: signal.value,
+                symbol: signal.symbol.clone(),
+            }),
+        }))
     }
 
     #[test]
     fn check_present() {
-        let n = network();
-        let present = ExpectStep {
-            present: Some(true),
-            ..spec(0x100)
-        };
-        assert!(check(&present, Some(&battery(400.0, "READY")), &n).is_ok());
-        let err = check(&present, None, &n).unwrap_err();
+        let present = can_assertion(0x100, "", Some(true), None, None, None);
+        assert!(check_assertion(&present, Some(&decoded_obs(400.0, None))).is_ok());
+        let err = check_assertion(&present, None).unwrap_err();
         assert!(err.contains("present"), "got: {err}");
 
-        let absent = ExpectStep {
-            present: Some(false),
-            ..spec(0x100)
-        };
-        assert!(check(&absent, None, &n).is_ok());
+        let absent = can_assertion(0x100, "", Some(false), None, None, None);
+        assert!(check_assertion(&absent, None).is_ok());
     }
 
     #[test]
     fn check_equals_numeric() {
-        let n = network();
-        let frame = battery(400.0, "READY");
-        let pass = ExpectStep {
-            signal: Some("voltage".into()),
-            equals: Some(ExpectedValue::Num(400.0)),
-            ..spec(0x100)
-        };
-        assert!(check(&pass, Some(&frame), &n).is_ok());
-        let fail = ExpectStep {
-            signal: Some("voltage".into()),
-            equals: Some(ExpectedValue::Num(401.0)),
-            ..spec(0x100)
-        };
-        let err = check(&fail, Some(&frame), &n).unwrap_err();
+        let pass = can_assertion(
+            0x100,
+            "voltage",
+            None,
+            Some(ExpectedValue::Num(400.0)),
+            None,
+            None,
+        );
+        assert!(check_assertion(&pass, Some(&decoded_obs(400.0, None))).is_ok());
+        let fail = can_assertion(
+            0x100,
+            "voltage",
+            None,
+            Some(ExpectedValue::Num(401.0)),
+            None,
+            None,
+        );
+        let err = check_assertion(&fail, Some(&decoded_obs(400.0, None))).unwrap_err();
         assert!(err.contains("expected 401, got 400"), "got: {err}");
     }
 
     #[test]
     fn check_equals_bool() {
-        let n = network();
-        let on = motor(true);
-        let pass = ExpectStep {
-            signal: Some("motor_enable".into()),
-            equals: Some(ExpectedValue::Bool(true)),
-            ..spec(0x220)
-        };
-        assert!(check(&pass, Some(&on), &n).is_ok());
-        let fail = ExpectStep {
-            signal: Some("motor_enable".into()),
-            equals: Some(ExpectedValue::Bool(false)),
-            ..spec(0x220)
-        };
-        assert!(check(&fail, Some(&on), &n).is_err());
+        let pass = can_assertion(
+            0x220,
+            "motor_enable",
+            None,
+            Some(ExpectedValue::Bool(true)),
+            None,
+            None,
+        );
+        assert!(check_assertion(&pass, Some(&decoded_obs(1.0, None))).is_ok());
+        let fail = can_assertion(
+            0x220,
+            "motor_enable",
+            None,
+            Some(ExpectedValue::Bool(false)),
+            None,
+            None,
+        );
+        assert!(check_assertion(&fail, Some(&decoded_obs(1.0, None))).is_err());
     }
 
     #[test]
     fn check_equals_symbol() {
-        let n = network();
-        let frame = battery(400.0, "READY");
-        let pass = ExpectStep {
-            signal: Some("state".into()),
-            equals: Some(ExpectedValue::Str("READY".into())),
-            ..spec(0x100)
-        };
-        assert!(check(&pass, Some(&frame), &n).is_ok());
-        let fail = ExpectStep {
-            signal: Some("state".into()),
-            equals: Some(ExpectedValue::Str("FAULT".into())),
-            ..spec(0x100)
-        };
-        assert!(check(&fail, Some(&frame), &n).is_err());
+        let pass = can_assertion(
+            0x100,
+            "state",
+            None,
+            Some(ExpectedValue::Str("READY".into())),
+            None,
+            None,
+        );
+        assert!(check_assertion(&pass, Some(&decoded_obs(2.0, Some("READY")))).is_ok());
+        let fail = can_assertion(
+            0x100,
+            "state",
+            None,
+            Some(ExpectedValue::Str("FAULT".into())),
+            None,
+            None,
+        );
+        assert!(check_assertion(&fail, Some(&decoded_obs(2.0, Some("READY")))).is_err());
     }
 
     #[test]
     fn check_comparisons() {
-        let n = network();
-        let frame = battery(400.0, "READY");
-        let gt_pass = ExpectStep {
-            signal: Some("voltage".into()),
-            greater_than: Some(350.0),
-            ..spec(0x100)
-        };
-        assert!(check(&gt_pass, Some(&frame), &n).is_ok());
-        let gt_fail = ExpectStep {
-            signal: Some("voltage".into()),
-            greater_than: Some(450.0),
-            ..spec(0x100)
-        };
-        let err = check(&gt_fail, Some(&frame), &n).unwrap_err();
+        let gt_pass = can_assertion(0x100, "voltage", None, None, Some(350.0), None);
+        assert!(check_assertion(&gt_pass, Some(&decoded_obs(400.0, None))).is_ok());
+        let gt_fail = can_assertion(0x100, "voltage", None, None, Some(450.0), None);
+        let err = check_assertion(&gt_fail, Some(&decoded_obs(400.0, None))).unwrap_err();
         assert!(err.contains("expected > 450, got 400"), "got: {err}");
-        let lt_pass = ExpectStep {
-            signal: Some("voltage".into()),
-            less_than: Some(450.0),
-            ..spec(0x100)
-        };
-        assert!(check(&lt_pass, Some(&frame), &n).is_ok());
+        let lt_pass = can_assertion(0x100, "voltage", None, None, None, Some(450.0));
+        assert!(check_assertion(&lt_pass, Some(&decoded_obs(400.0, None))).is_ok());
     }
 
     #[test]
     fn check_unknown_signal_and_frame() {
         let n = network();
         let battery_frame = battery(400.0, "READY");
-        let unknown = ExpectStep {
-            signal: Some("nope".into()),
-            equals: Some(ExpectedValue::Num(1.0)),
-            ..spec(0x100)
-        };
-        assert!(check(&unknown, Some(&battery_frame), &n).is_err());
+        let err = can_observed(&n, 0x100, "nope", Some(&battery_frame)).unwrap_err();
+        assert!(err.contains("unknown signal"), "got: {err}");
 
-        let missing = ExpectStep {
-            signal: Some("voltage".into()),
-            equals: Some(ExpectedValue::Num(400.0)),
-            ..spec(0x100)
-        };
-        let err = check(&missing, None, &n).unwrap_err();
+        let missing = can_assertion(
+            0x100,
+            "voltage",
+            None,
+            Some(ExpectedValue::Num(400.0)),
+            None,
+            None,
+        );
+        let err = check_assertion(&missing, None).unwrap_err();
         assert!(err.contains("no frame"), "got: {err}");
 
-        let not_in_dbc = ExpectStep {
-            signal: Some("voltage".into()),
-            equals: Some(ExpectedValue::Num(400.0)),
-            ..spec(0x999)
-        };
-        assert!(check(&not_in_dbc, Some(&frame(0x999, vec![0; 8])), &n).is_err());
+        let err = can_observed(&n, 0x999, "voltage", Some(&frame(0x999, vec![0; 8]))).unwrap_err();
+        assert!(err.contains("no message with id"), "got: {err}");
     }
 
     /// Minimal deterministic target: frames are returned by `poll` once their
@@ -688,20 +764,9 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         }
     }
 
-    impl TestTarget for MockTarget {
+    impl CanLink for MockTarget {
         fn network(&self) -> &Network {
             &self.network
-        }
-
-        fn elapsed_us(&self) -> Timestamp {
-            self.time
-        }
-
-        fn reset(&mut self) -> Result<(), TargetError> {
-            self.time = 0;
-            self.visible.clear();
-            self.later.clear();
-            Ok(())
         }
 
         fn set_signal(
@@ -723,21 +788,42 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
             Err(TargetError::UnsupportedOnHardware("mock".into()))
         }
 
-        async fn send(&mut self, f: CanFrame) -> Result<(), TargetError> {
-            self.push_now(f);
+        fn send(&mut self, f: CanFrame) -> BoxFut<'_, Result<(), TargetError>> {
+            Box::pin(async move {
+                self.push_now(f);
+                Ok(())
+            })
+        }
+
+        fn poll(&mut self, id: u32) -> BoxFut<'_, Result<Option<CanFrame>, TargetError>> {
+            Box::pin(async move {
+                self.time += POLL_US;
+                self.flush();
+                Ok(self.visible.iter().rev().find(|f| f.id == id).cloned())
+            })
+        }
+    }
+
+    impl NetmapLink for MockTarget {}
+
+    impl TestTarget for MockTarget {
+        fn elapsed_us(&self) -> Timestamp {
+            self.time
+        }
+
+        fn reset(&mut self) -> Result<(), TargetError> {
+            self.time = 0;
+            self.visible.clear();
+            self.later.clear();
             Ok(())
         }
 
-        async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
-            self.time += duration;
-            self.flush();
-            Ok(())
-        }
-
-        async fn poll(&mut self, id: u32) -> Result<Option<CanFrame>, TargetError> {
-            self.time += POLL_US;
-            self.flush();
-            Ok(self.visible.iter().rev().find(|f| f.id == id).cloned())
+        fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+            Box::pin(async move {
+                self.time += duration;
+                self.flush();
+                Ok(())
+            })
         }
     }
 
@@ -896,6 +982,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
     // ---- UDP assertion helpers ----
 
     use embrig_net::netmap::{FieldDef, FieldType, Netmap};
+    use embrig_net::MessageDef;
 
     fn udp_netmap() -> Netmap {
         let mut netmap = Netmap::new();
@@ -954,66 +1041,74 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         UdpDatagram::new("127.0.0.1:6000".parse().unwrap(), message.dst, payload)
     }
 
+    fn udp_assertion(
+        field: &str,
+        present: Option<bool>,
+        equals: Option<ExpectedValue>,
+        greater_than: Option<f64>,
+        less_than: Option<f64>,
+    ) -> Assertion {
+        Assertion {
+            kind: "message",
+            label: "`MotionState`".to_string(),
+            field: field.to_string(),
+            present,
+            equals,
+            greater_than,
+            less_than,
+        }
+    }
+
     #[test]
     fn check_udp_equals_numeric_and_symbol() {
-        let dg = udp_datagram(1.5, 1);
-        let pass = ExpectUdpStep {
-            equals: Some(ExpectedValue::Num(1.5)),
-            ..udp_spec("speed")
-        };
-        assert!(check_udp(&pass, Some(&dg), &udp_message()).is_ok());
-        let fail = ExpectUdpStep {
-            equals: Some(ExpectedValue::Num(2.0)),
-            ..udp_spec("speed")
-        };
-        let err = check_udp(&fail, Some(&dg), &udp_message()).unwrap_err();
+        let pass = udp_assertion("speed", None, Some(ExpectedValue::Num(1.5)), None, None);
+        assert!(check_assertion(&pass, Some(&decoded_obs(1.5, None))).is_ok());
+        let fail = udp_assertion("speed", None, Some(ExpectedValue::Num(2.0)), None, None);
+        let err = check_assertion(&fail, Some(&decoded_obs(1.5, None))).unwrap_err();
         assert!(err.contains("expected 2, got 1.5"), "got: {err}");
 
-        let symbol = ExpectUdpStep {
-            equals: Some(ExpectedValue::Str("DRIVING".into())),
-            ..udp_spec("state")
-        };
-        assert!(check_udp(&symbol, Some(&dg), &udp_message()).is_ok());
-        let symbol_fail = ExpectUdpStep {
-            equals: Some(ExpectedValue::Str("STOPPED".into())),
-            ..udp_spec("state")
-        };
-        assert!(check_udp(&symbol_fail, Some(&dg), &udp_message()).is_err());
+        let symbol = udp_assertion(
+            "state",
+            None,
+            Some(ExpectedValue::Str("DRIVING".into())),
+            None,
+            None,
+        );
+        assert!(check_assertion(&symbol, Some(&decoded_obs(1.0, Some("DRIVING")))).is_ok());
+        let symbol_fail = udp_assertion(
+            "state",
+            None,
+            Some(ExpectedValue::Str("STOPPED".into())),
+            None,
+            None,
+        );
+        assert!(check_assertion(&symbol_fail, Some(&decoded_obs(1.0, Some("DRIVING")))).is_err());
     }
 
     #[test]
     fn check_udp_comparisons_and_present() {
-        let dg = udp_datagram(1.5, 0);
-        let gt = ExpectUdpStep {
-            greater_than: Some(1.0),
-            ..udp_spec("speed")
-        };
-        assert!(check_udp(&gt, Some(&dg), &udp_message()).is_ok());
-        let lt = ExpectUdpStep {
-            less_than: Some(5.0),
-            ..udp_spec("speed")
-        };
-        assert!(check_udp(&lt, Some(&dg), &udp_message()).is_ok());
-        let present = ExpectUdpStep {
-            present: Some(true),
-            ..ExpectUdpStep::default()
-        };
-        assert!(check_udp(&present, Some(&dg), &udp_message()).is_ok());
-        assert!(check_udp(&present, None, &udp_message()).is_err());
+        let gt = udp_assertion("speed", None, None, Some(1.0), None);
+        assert!(check_assertion(&gt, Some(&decoded_obs(1.5, None))).is_ok());
+        let lt = udp_assertion("speed", None, None, None, Some(5.0));
+        assert!(check_assertion(&lt, Some(&decoded_obs(1.5, None))).is_ok());
+        let present = udp_assertion("", Some(true), None, None, None);
+        assert!(check_assertion(&present, Some(&decoded_obs(1.5, None))).is_ok());
+        assert!(check_assertion(&present, None).is_err());
     }
 
-    #[test]
-    fn check_udp_unknown_field() {
-        let dg = udp_datagram(1.5, 0);
-        let unknown = ExpectUdpStep {
-            equals: Some(ExpectedValue::Num(1.0)),
-            ..udp_spec("nope")
-        };
-        let err = check_udp(&unknown, Some(&dg), &udp_message()).unwrap_err();
+    #[tokio::test]
+    async fn expect_udp_unknown_field_is_a_decode_error() {
+        let mut target = MockUdpTarget::new();
+        target.visible.push(udp_datagram(1.5, 0));
+        let mut s = udp_spec("nope");
+        s.equals = Some(ExpectedValue::Num(1.0));
+        let err = evaluate_udp_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
         assert!(err.contains("cannot decode"), "got: {err}");
     }
 
-    /// A minimal UDP target: `poll_udp` advances time by a poll interval and
+    /// A minimal UDP target: `poll_msg` advances time by a poll interval and
     /// returns the most recent datagram for `dst`.
     struct MockUdpTarget {
         time: Timestamp,
@@ -1050,10 +1145,38 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         }
     }
 
-    impl TestTarget for MockUdpTarget {
+    impl CanLink for MockUdpTarget {
         fn network(&self) -> &Network {
             unimplemented!("no DBC network for a UDP-only mock")
         }
+    }
+
+    impl NetmapLink for MockUdpTarget {
+        fn netmap(&self) -> Option<&Netmap> {
+            Some(&self.netmap)
+        }
+        fn host(&self) -> Result<SocketAddr, TargetError> {
+            Ok("127.0.0.1:5000".parse().unwrap())
+        }
+        fn send_msg(&mut self, dg: UdpDatagram) -> BoxFut<'_, Result<(), TargetError>> {
+            Box::pin(async move {
+                self.visible.push(dg);
+                Ok(())
+            })
+        }
+        fn poll_msg(
+            &mut self,
+            dst: SocketAddr,
+        ) -> BoxFut<'_, Result<Option<UdpDatagram>, TargetError>> {
+            Box::pin(async move {
+                self.time += POLL_US;
+                self.flush();
+                Ok(self.visible.iter().rev().find(|d| d.dst == dst).cloned())
+            })
+        }
+    }
+
+    impl TestTarget for MockUdpTarget {
         fn elapsed_us(&self) -> Timestamp {
             self.time
         }
@@ -1063,48 +1186,12 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
             self.later.clear();
             Ok(())
         }
-        fn set_signal(
-            &mut self,
-            _ecu: &str,
-            _id: u32,
-            _signal: &str,
-            _value: SignalValue,
-        ) -> Result<(), TargetError> {
-            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
-        }
-        fn add_fault(
-            &mut self,
-            _fault: Fault,
-            _start: Option<Timestamp>,
-            _duration: Option<Timestamp>,
-        ) -> Result<(), TargetError> {
-            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
-        }
-        async fn send(&mut self, _frame: CanFrame) -> Result<(), TargetError> {
-            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
-        }
-        async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
-            self.time += duration;
-            self.flush();
-            Ok(())
-        }
-        async fn poll(&mut self, _id: u32) -> Result<Option<CanFrame>, TargetError> {
-            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
-        }
-        fn netmap(&self) -> Option<&Netmap> {
-            Some(&self.netmap)
-        }
-        fn udp_host(&self) -> Result<SocketAddr, TargetError> {
-            Ok("127.0.0.1:5000".parse().unwrap())
-        }
-        async fn send_udp(&mut self, dg: UdpDatagram) -> Result<(), TargetError> {
-            self.visible.push(dg);
-            Ok(())
-        }
-        async fn poll_udp(&mut self, dst: SocketAddr) -> Result<Option<UdpDatagram>, TargetError> {
-            self.time += POLL_US;
-            self.flush();
-            Ok(self.visible.iter().rev().find(|d| d.dst == dst).cloned())
+        fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+            Box::pin(async move {
+                self.time += duration;
+                self.flush();
+                Ok(())
+            })
         }
     }
 
