@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenHIL — Deterministic hardware-in-the-loop CAN testing</title>
+  <meta name="description" content="Run a virtual EV powertrain on any laptop, inject faults, get a report that explains each failure — then run the same YAML tests against a real ECU over SocketCAN. Deterministic, no flaky tests.">
+  <link rel="canonical" href="https://davidneurieder.github.io/openhil/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="OpenHIL">
+  <meta property="og:title" content="OpenHIL — Deterministic hardware-in-the-loop CAN testing">
+  <meta property="og:description" content="Deterministic hardware-in-the-loop CAN testing. The same YAML tests run on a virtual EV powertrain or a real ECU over SocketCAN.">
+  <meta property="og:url" content="https://davidneurieder.github.io/openhil/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="OpenHIL — Deterministic hardware-in-the-loop CAN testing">
+  <meta name="twitter:description" content="The same YAML tests run on a virtual EV powertrain or a real ECU over SocketCAN. Deterministic, no flaky tests.">
+  <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "OpenHIL",
+    "operatingSystem": "Linux, macOS, Windows",
+    "applicationCategory": "DeveloperApplication",
+    "description": "Deterministic hardware-in-the-loop CAN testing: run YAML test suites against a virtual EV powertrain or a real ECU over SocketCAN.",
+    "url": "https://davidneurieder.github.io/openhil/",
+    "softwareVersion": "0.1.0",
+    "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <div class="logo" role="img" aria-label="OpenHIL logo">
+        <i class="node a"></i>
+        <i class="node b"></i>
+      </div>
+      <span class="eyebrow">Rust · CAN · Deterministic</span>
+      <h1>OpenHIL</h1>
+      <p class="lead">Run a virtual EV powertrain on any laptop, inject faults, and get a report that explains each failure — then run the <strong>same YAML tests</strong> against a real ECU over SocketCAN.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#get-started">Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/DavidNeurieder/openhil">View source</a>
+      </div>
+      <p class="trust">Deterministic · No flaky tests · AGPL-3.0</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="section" id="features">
+      <div class="container">
+        <h2>Built for reproducibility</h2>
+        <div class="grid">
+          <div class="card">
+            <div class="icon">⚡</div>
+            <h3>Deterministic by design</h3>
+            <p>An integer-microsecond clock, ECUs stepped in config order — a PASS→FAIL flip is always caused by your change, never by the runner.</p>
+          </div>
+          <div class="card">
+            <div class="icon">🔁</div>
+            <h3>One suite, two targets</h3>
+            <p>The same YAML tests drive the virtual simulation on your laptop or a live CAN bus over SocketCAN — without rewriting anything.</p>
+          </div>
+          <div class="card">
+            <div class="icon">📐</div>
+            <h3>DBC native</h3>
+            <p>Parse <code>BO_</code>/<code>SG_</code>/<code>VAL_</code> with Intel/Motorola byte order, signed values, factor/offset scaling and symbolic value tables.</p>
+          </div>
+          <div class="card">
+            <div class="icon">🧪</div>
+            <h3>YAML test DSL</h3>
+            <p><code>send</code>, <code>set_signal</code>, <code>wait</code>, <code>expect</code>, <code>fault</code>. Assert <code>equals</code>, <code>greater_than</code>, <code>less_than</code>, <code>present</code>, <code>absent</code> within <code>us</code>/<code>ms</code>/<code>s</code> deadlines.</p>
+          </div>
+          <div class="card">
+            <div class="icon">📊</div>
+            <h3>Reports that explain</h3>
+            <p>HTML/JSON results with the reason each test failed, and exit codes: 0 all pass · 1 test failures · 2 usage errors.</p>
+          </div>
+          <div class="card">
+            <div class="icon">🛠</div>
+            <h3>One-command CLI</h3>
+            <p><code>init</code> scaffolds vehicle.yaml, DBC and tests; <code>simulate</code> prints the deterministic bus trace; <code>test</code> and <code>report</code> close the loop.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-tint" id="how">
+      <div class="container">
+        <h2>How it works</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="num">1</span>
+            <div>
+              <h3>Write tests in YAML</h3>
+              <p>Plain YAML describes stimulus and assertions against real DBC signals — no C harness, no bespoke framework.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="num">2</span>
+            <div>
+              <h3>Run them on a virtual powertrain</h3>
+              <p>A deterministic EV simulator — charger, VCU, motor — runs on any laptop. Inject overvoltage, brake presses, dropped frames.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="num">3</span>
+            <div>
+              <h3>Re-run against real hardware</h3>
+              <p>The identical suite drives a physical ECU over SocketCAN. No router in the loop: <code>set_signal</code> and <code>fault</code> are rejected with a clear error, not silently ignored.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="action">
+      <div class="container">
+        <h2>See it in action</h2>
+        <div class="term-grid">
+          <div class="terminal">
+            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">openhil test examples/ev-powertrain/vehicle.yaml</span></div>
+            <pre><span class="t-dim">$ openhil test examples/ev-powertrain/vehicle.yaml</span>
+<span class="t-pass">PASS</span>  brake_press_disables_motor           <span class="t-dim">(360 ms)</span>
+<span class="t-pass">PASS</span>  bus_carries_periodic_frames           <span class="t-dim">(230 ms)</span>
+<span class="t-pass">PASS</span>  charger_faults_on_stale_battery       <span class="t-dim">(910 ms)</span>
+<span class="t-pass">PASS</span>  nominal_conditions_enable_motor       <span class="t-dim">(320 ms)</span>
+<span class="t-pass">PASS</span>  overvoltage_disables_motor            <span class="t-dim">(410 ms)</span>
+
+<span class="t-prompt">5 passed, 0 failed</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">openhil simulate vehicle.yaml --duration 600ms --verbose</span></div>
+            <pre><span class="t-dim">$ openhil simulate examples/ev-powertrain/vehicle.yaml --duration 600ms --verbose</span>
+
+           0 0x100  [8] A0 0F 00 00 5A 02 01 00
+           0 0x110  [8] 00 00 00 00 00 00 00 00
+           0 0x120  [8] 01 00 00 00 00 00 00 00
+           0 0x210  [8] 00 00 00 00 00 00 00 00
+           0 0x220  [8] 00 00 00 00 00 00 00 00
+           0 0x230  [8] 03 00 00 00 00 00 00 00
+       50000 0x220  [8] 01 00 00 00 00 00 00 00
+       50000 0x230  [8] 03 00 00 00 00 00 00 00
+      100000 0x100  [8] A0 0F 00 00 5A 02 01 00
+<span class="t-dim">         … deterministic integer-µs clock, ECUs stepped in config order</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">a change flips exactly the right test</span></div>
+            <pre><span class="t-dim"># bump the VCU overvoltage threshold from 450 V to 460 V in vehicle.yaml</span>
+<span class="t-dim">$ openhil test examples/ev-powertrain/vehicle.yaml</span>
+
+<span class="t-pass">PASS</span>  brake_press_disables_motor           <span class="t-dim">(360 ms)</span>
+<span class="t-pass">PASS</span>  bus_carries_periodic_frames           <span class="t-dim">(230 ms)</span>
+<span class="t-pass">PASS</span>  charger_faults_on_stale_battery       <span class="t-dim">(910 ms)</span>
+<span class="t-pass">PASS</span>  nominal_conditions_enable_motor       <span class="t-dim">(320 ms)</span>
+<span class="t-fail">FAIL</span>  overvoltage_disables_motor            <span class="t-dim">(410 ms)</span>
+       <span class="t-fail">0x220.motor_enable expected false, got 1</span>
+
+<span class="t-prompt">4 passed, 1 failed</span>
+<span class="t-dim"># the flip is caused by your change, never by the runner</span></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-tint" id="get-started">
+      <div class="container">
+        <h2>Get started in two minutes</h2>
+        <p class="center">A Rust workspace — clone, build, and run the example suite. No CAN hardware needed to start.</p>
+        <div class="centered-code">
+          <pre class="code-block"><code># Run the example EV powertrain suite (virtual, no hardware needed)
+cargo run --bin openhil -- test examples/ev-powertrain/vehicle.yaml
+# → 5 passed, 0 failed
+
+# Scaffold your own project
+cargo run --bin openhil -- init my-project
+cargo run --bin openhil -- test my-project/vehicle.yaml
+
+# Drive a real CAN bus (build with the socketcan feature)
+cargo build --features socketcan
+cargo run --features socketcan --bin openhil -- \
+  test my-project/vehicle.yaml --interface vcan0</code></pre>
+        </div>
+
+        <h3 class="center">A test in plain YAML</h3>
+        <div class="centered-code">
+          <pre class="code-block"><code>name: overvoltage_disables_motor
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - set_signal: { ecu: battery, id: 0x100, signal: voltage, value: 460.0 }
+  - expect: { id: 0x220, signal: motor_enable, equals: false, within: 1s }
+  - expect: { id: 0x230, signal: state, equals: "SAFE", within: 1s }</code></pre>
+        </div>
+
+        <p class="note">The same file runs in the simulator and on the bus. Over 450&nbsp;V the VCU refuses to enable the motor — a PASS→FAIL flip proves the ECU behaves, not the runner.</p>
+
+        <h3 class="center">Development</h3>
+        <div class="centered-code">
+          <pre class="code-block"><code>cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --features socketcan   # 83 tests, incl. 9 CLI black-box
+scripts/vcan-smoke.sh           # optional: exercise the real SocketCAN path on vcan0</code></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>OpenHIL — version 0.1.0 · AGPL-3.0-or-later — <a href="https://github.com/DavidNeurieder/openhil/blob/main/LICENSE">License</a> · <a href="https://github.com/DavidNeurieder/openhil/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/DavidNeurieder/openhil">Source</a></p>
+    </div>
+  </footer>
+</body>
+</html>

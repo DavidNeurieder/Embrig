@@ -82,7 +82,7 @@ If you have a real or virtual CAN device:
 scripts/vcan-smoke.sh     # brings up vcan0 (needs sudo) and runs the socketcan path
 ```
 
-See [`CHANGELOG.md`](CHANGELOG.md) for release history.
+Website: <https://davidneurieder.github.io/openhil/>. See [`CHANGELOG.md`](CHANGELOG.md) for release history.
 
 ## License
 
