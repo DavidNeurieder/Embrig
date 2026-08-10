@@ -5,6 +5,7 @@
 //! exist only when the `socketcan` feature is enabled.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use embrig_core::ecu::EcuError;
@@ -15,6 +16,7 @@ use embrig_core::simulation::Simulation;
 use embrig_core::time::Timestamp;
 use embrig_dbc::Network;
 use embrig_models::{build_simulation_indexed, VehicleConfig};
+use embrig_net::{Netmap, UdpDatagram, UdpFault};
 use thiserror::Error;
 
 /// Poll granularity: how far a `poll` advances virtual time (or how long a
@@ -34,10 +36,14 @@ pub enum TargetError {
     UnsupportedOnHardware(String),
     #[error("unsupported on the system under test (SIL): {0}")]
     UnsupportedOnSut(String),
+    #[error("unsupported on this target: {0}")]
+    UnsupportedOnTarget(String),
     #[error("firmware under test failed a step: {0}")]
     SutTimeout(String),
     #[error("can error: {0}")]
     Can(String),
+    #[error("net error: {0}")]
+    Net(String),
 }
 
 /// The interface the test runner drives.
@@ -75,6 +81,57 @@ pub trait TestTarget {
     async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError>;
     /// Advance a poll interval and return the most recent frame with `id`.
     async fn poll(&mut self, id: u32) -> Result<Option<CanFrame>, TargetError>;
+
+    /// The netmap of a UDP network, if this target supports UDP.
+    fn netmap(&self) -> Option<&Netmap> {
+        None
+    }
+
+    /// The host endpoint used as the source of injected UDP datagrams.
+    fn udp_host(&self) -> Result<SocketAddr, TargetError> {
+        Err(TargetError::UnsupportedOnTarget(
+            "UDP is not supported by this target".into(),
+        ))
+    }
+
+    /// Transmit a UDP datagram. Targets without UDP support fail.
+    async fn send_udp(&mut self, _dg: UdpDatagram) -> Result<(), TargetError> {
+        Err(TargetError::UnsupportedOnTarget(
+            "send_udp is not supported by this target".into(),
+        ))
+    }
+
+    /// Poll for the most recent datagram delivered to `dst`.
+    async fn poll_udp(&mut self, _dst: SocketAddr) -> Result<Option<UdpDatagram>, TargetError> {
+        Err(TargetError::UnsupportedOnTarget(
+            "poll_udp is not supported by this target".into(),
+        ))
+    }
+
+    /// Override a field of a UDP message on an ECU.
+    fn set_field(
+        &mut self,
+        _ecu: &str,
+        _message: &str,
+        _field: &str,
+        _value: SignalValue,
+    ) -> Result<(), TargetError> {
+        Err(TargetError::UnsupportedOnTarget(
+            "set_field is not supported by this target".into(),
+        ))
+    }
+
+    /// Inject a UDP fault, optionally windowed.
+    fn add_fault_udp(
+        &mut self,
+        _fault: UdpFault,
+        _start: Option<Timestamp>,
+        _duration: Option<Timestamp>,
+    ) -> Result<(), TargetError> {
+        Err(TargetError::UnsupportedOnTarget(
+            "add_fault_udp is not supported by this target".into(),
+        ))
+    }
 }
 
 /// A test target running against the deterministic virtual simulation.

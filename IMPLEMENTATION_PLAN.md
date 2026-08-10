@@ -3,7 +3,8 @@
 Goal: build the full v1 vision (per `MVP_PLAN_V3.md`) — Rust workspace with a
 deterministic virtual CAN simulation, DBC support, YAML test runner, SocketCAN
 hardware mode, software-in-the-loop (host-compiled firmware on the virtual
-bus), and a student-replicable EV powertrain example.
+bus), an Ethernet (UDP) transport (virtual + SIL + hardware), and a
+student-replicable EV powertrain example.
 
 ## Locked decisions
 
@@ -12,6 +13,9 @@ bus), and a student-replicable EV powertrain example.
   synchronous and deterministic (virtual tests never use wall clock)
 - **SocketCAN**: feature-gated (`socketcan` feature), uses `socketcan 3.6.2`
   with its native `tokio` integration
+- **Ethernet (UDP)**: transport-only `embrig-net` crate (netmap codec +
+  `UdpSim`), targets live in `embrig-test::udp`; `embrig-net` depends only on
+  `embrig-core`, never on `embrig-test` (avoids a dependency cycle)
 - **Time**: integer microseconds (`u64`); ECUs stepped in config order (no
   HashMap iteration) → reproducible results
 
@@ -25,12 +29,15 @@ crates/
                    (Intel/Motorola, signed, factor/offset). thiserror.
   embrig-models   VehicleConfig (YAML), ConfigEcu, Rust vECUs
                    (Charger, VehicleController, Motor), Simulation builder.
+  embrig-net      Deterministic virtual UDP network: netmap codec, UdpDatagram,
+                   UdpEcu trait, UdpConfigEcu, UdpRegistry, UdpSim with routing
+                   + drop/delay/corrupt faults. NO tokio/test deps.
   embrig-can      SocketCanBus async backend (feature socketcan). thiserror.
   embrig-sil      Software-in-the-loop: SilRegistry, SilTarget, sil_run,
                    wall-clock step budgets. Host-compiled firmware on the
                    virtual bus.
-  embrig-test     YAML test DSL, async runner (virtual + SIL + hardware targets),
-                   assertions, HTML/JSON reports. serde + saphyr + tokio + serde_json.
+  embrig-test     YAML test DSL, async runner (virtual + SIL + UDP + hardware
+                   targets), assertions, HTML/JSON reports. serde + saphyr + tokio + serde_json.
   embrig-cli      binary `embrig`: init / simulate / test / report.
                    clap + anyhow. #[tokio::main].
 examples/ev-powertrain  vehicle.yaml, powertrain.dbc, tests/*.yaml, README.md (student BOM)
@@ -98,6 +105,33 @@ let result = sil_run(&config, &dbc, registry, &suites)?;
 - The CLI does not run `--interface sil`; SIL is used from the `embrig-sil`
   crate (bundled `sil_firmware` example: 2/2 suites pass).
 
+## UDP (Ethernet) transport
+
+Ethernet nodes are described by a **netmap** instead of a DBC: each message is
+keyed by its destination endpoint and carries named fields at byte offsets
+(`u8`, `bool`, `u16le`/`u16be`, `u32le`/`u32be`, `i16le`, `i32le`, `f32le`,
+`f64le`, with scaling and symbolic values). In `vehicle.yaml`, `eth_ecus:`
+(`type: udp-config` = config-driven, `type: udp-sil` = host-compiled firmware)
+and `networks:` (host endpoint + netmap path) replace/augment `ecus:` + `dbc:`;
+
+```yaml
+eth_ecus:
+  - { name: motion, type: udp-config, address: 192.168.1.30:5000,
+      message: MotionState, period_us: 50000, fields: { speed: 0.0, state: STOPPED } }
+networks:
+  - { name: eth, type: udp, host: 192.168.1.10:5000, netmap: netmap.yaml }
+interfaces:
+  - { name: udp, type: udp }
+```
+
+The same DSL adds four steps — `send_udp`, `set_field`, `expect_udp`,
+`fault_udp` (drop/delay/corrupt by message name) — and the targets mirror the
+CAN ones: `UdpTarget` (virtual), `UdpSutTarget` (firmware, `catch_unwind` →
+`SutTimeout`), `UdpHardwareTarget` (bound UDP socket). A vehicle with no `dbc:`
+is pure-Ethernet; `--interface udp` selects the target and DBC loading is
+skipped. Bundled demo: `crates/embrig-test/examples/rover/` (`udp_rover`
+example: 4/4 suites pass).
+
 ## Test DSL
 
 ```yaml
@@ -111,7 +145,8 @@ steps:
   - expect: { id: 0x220, signal: motor_enable, equals: false, within: 1s }
 ```
 
-Step kinds: `send` (raw), `set_signal`, `wait`, `expect`, `fault`.
+Step kinds: `send` (raw), `set_signal`, `wait`, `expect`, `fault` — plus the
+UDP equivalents `send_udp`, `set_field`, `expect_udp`, `fault_udp`.
 Assertions: `equals`, `greater_than`, `less_than`, `present`, `absent`,
 `within`. Durations support `us/ms/s`. Hardware target: `drop`/`set_signal`
 unsupported (no CAN router in path) — documented + error.
@@ -126,9 +161,10 @@ unsupported (no CAN router in path) — documented + error.
 2. `embrig-dbc` → codec tests incl. round-trip + known vectors
 3. `embrig-models` → vECU behavior tests
 4. `embrig-can` → compiles feature-gated
-5. `embrig-test` → DSL/assertion tests, runner tests
-6. `embrig-sil` → registry/budget/target tests, `sil_firmware` example
-7. `embrig-cli` → black-box tests (exit codes, report files)
-8. `examples/ev-powertrain` → demo scenarios run green + regression proof
-9. CI workflow; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-   `cargo test`, optional vcan0 job
+5. `embrig-net` → netmap codec, ecu, sim tests (routing/faults/determinism)
+6. `embrig-test` → DSL/assertion tests, runner tests, `udp` targets + suites
+7. `embrig-sil` → registry/budget/target tests, `sil_firmware` example
+8. `embrig-cli` → black-box tests (exit codes, report files)
+9. `examples/ev-powertrain` → demo scenarios run green + regression proof
+10. CI workflow; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+    `cargo test`, optional vcan0 job

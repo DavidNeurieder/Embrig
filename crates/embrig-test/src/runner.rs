@@ -9,9 +9,13 @@ use embrig_core::frame::CanFrame;
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
 use embrig_dbc::Network;
+use embrig_net::{MessageDef, UdpDatagram, UdpFault};
 use thiserror::Error;
 
-use crate::dsl::{parse_duration, ExpectStep, ExpectedValue, FaultKind, Step, TestSpec};
+use crate::dsl::{
+    parse_duration, ExpectStep, ExpectUdpStep, ExpectedValue, FaultKind, Step, TestSpec,
+    UdpFaultKind,
+};
 use crate::report::{SuiteResult, TestResult};
 use crate::target::{TargetError, TestTarget};
 
@@ -24,6 +28,14 @@ pub enum TestError {
     Dsl(#[from] crate::dsl::DslError),
     #[error("invalid frame: {0}")]
     Frame(#[from] embrig_core::frame::FrameError),
+    #[error("{0}")]
+    Message(String),
+}
+
+impl From<String> for TestError {
+    fn from(message: String) -> Self {
+        TestError::Message(message)
+    }
 }
 
 /// Run every test file against a target, collecting one [`SuiteResult`].
@@ -105,6 +117,61 @@ pub async fn run_spec<T: TestTarget>(
                 let duration_us = duration.as_deref().map(parse_duration).transpose()?;
                 target
                     .add_fault(fault, start_us, duration_us)
+                    .map_err(|e| e.to_string())
+            }
+            Step::SendUdp { message, fields } => {
+                let netmap = target.netmap().ok_or_else(|| {
+                    "send_udp requires a UDP target (interface type `udp`)".to_string()
+                })?;
+                let message_def = netmap
+                    .message(message)
+                    .ok_or_else(|| format!("no message `{message}` in netmap"))?;
+                let values: Vec<(&str, SignalValue)> = fields
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), expected_to_signal(v)))
+                    .collect();
+                let payload = message_def
+                    .encode_fields(&values)
+                    .map_err(|e| format!("cannot encode `{message}`: {e}"))?;
+                let src = target.udp_host().map_err(|e| e.to_string())?;
+                target
+                    .send_udp(UdpDatagram::new(src, message_def.dst, payload))
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            Step::SetField {
+                ecu,
+                message,
+                field,
+                value,
+            } => target
+                .set_field(ecu, message, field, expected_to_signal(value))
+                .map_err(|e| e.to_string()),
+            Step::ExpectUdp { spec } => evaluate_udp_expect(spec, target, deadline).await,
+            Step::FaultUdp {
+                kind,
+                message,
+                delay,
+                byte,
+                mask,
+                start,
+                duration,
+            } => {
+                let netmap = target.netmap().ok_or_else(|| {
+                    "fault_udp requires a UDP target (interface type `udp`)".to_string()
+                })?;
+                let dst = netmap
+                    .message_dst(message)
+                    .ok_or_else(|| format!("no message `{message}` in netmap"))?;
+                let fault = udp_fault_from_kind(*kind, dst, delay.as_deref(), *byte, *mask)?;
+                let start_us = start
+                    .as_deref()
+                    .map(parse_duration)
+                    .transpose()?
+                    .or(Some(target.elapsed_us()));
+                let duration_us = duration.as_deref().map(parse_duration).transpose()?;
+                target
+                    .add_fault_udp(fault, start_us, duration_us)
                     .map_err(|e| e.to_string())
             }
         };
@@ -263,11 +330,140 @@ fn check(spec: &ExpectStep, frame: Option<&CanFrame>, network: &Network) -> Resu
     Ok(())
 }
 
+/// Build a [`UdpFault`] from the YAML fault_udp step fields.
+fn udp_fault_from_kind(
+    kind: UdpFaultKind,
+    dst: std::net::SocketAddr,
+    delay: Option<&str>,
+    byte: Option<usize>,
+    mask: Option<u8>,
+) -> Result<UdpFault, TestError> {
+    Ok(match kind {
+        UdpFaultKind::Drop => UdpFault::Drop { dst },
+        UdpFaultKind::Delay => UdpFault::Delay {
+            dst,
+            delay_us: parse_duration(delay.expect("validated by load_spec"))?,
+        },
+        UdpFaultKind::Corrupt => UdpFault::CorruptByte {
+            dst,
+            byte: byte.expect("validated by load_spec"),
+            mask: mask.expect("validated by load_spec"),
+        },
+    })
+}
+
+/// Poll a UDP assertion until it holds or its `within` deadline passes. The
+/// message's destination endpoint (from the netmap) identifies the traffic.
+async fn evaluate_udp_expect<T: TestTarget>(
+    spec: &ExpectUdpStep,
+    target: &mut T,
+    test_deadline: Timestamp,
+) -> Result<(), String> {
+    let message = target
+        .netmap()
+        .ok_or_else(|| "expect_udp requires a UDP target (interface type `udp`)".to_string())?
+        .message(&spec.message)
+        .cloned()
+        .ok_or_else(|| format!("no message `{}` in netmap", spec.message))?;
+    let dst = message.dst;
+
+    let within = match &spec.within {
+        Some(w) => parse_duration(w).map_err(|e| e.to_string())?,
+        None => 0,
+    };
+    let expect_deadline = target.elapsed_us().saturating_add(within);
+    let deadline = expect_deadline.min(test_deadline);
+
+    loop {
+        let dg = target.poll_udp(dst).await.map_err(|e| e.to_string())?;
+
+        if spec.effective_present() == Some(false) && dg.is_some() {
+            return Err(format!(
+                "expected no message `{}` but one was observed",
+                spec.message
+            ));
+        }
+
+        match check_udp(spec, dg.as_ref(), &message) {
+            Ok(()) => return Ok(()),
+            Err(message) => {
+                if within == 0 || target.elapsed_us() >= deadline {
+                    return Err(message);
+                }
+            }
+        }
+    }
+}
+
+/// Evaluate a UDP assertion against the latest observed datagram (or its
+/// absence).
+fn check_udp(
+    spec: &ExpectUdpStep,
+    dg: Option<&UdpDatagram>,
+    message: &MessageDef,
+) -> Result<(), String> {
+    if let Some(present) = spec.effective_present() {
+        return match (present, dg) {
+            (true, Some(_)) => Ok(()),
+            (false, None) => Ok(()),
+            (true, None) => Err(format!("expected message `{}` to be present", spec.message)),
+            (false, Some(_)) => unreachable!("handled before check_udp"),
+        };
+    }
+
+    let dg = dg.ok_or_else(|| format!("no message `{}` observed", spec.message))?;
+    let field = spec.field.as_deref().unwrap_or_default();
+    let decoded = message
+        .decode_field(&dg.payload, field)
+        .map_err(|e| format!("cannot decode `{}`: {e}", spec.message))?;
+
+    if let Some(expected) = &spec.equals {
+        let pass = match expected {
+            ExpectedValue::Num(v) => (decoded.value - v).abs() < 1e-6,
+            ExpectedValue::Bool(b) => (decoded.value > 0.5) == *b,
+            ExpectedValue::Str(s) => decoded.symbol.as_deref() == Some(s.as_str()),
+        };
+        if !pass {
+            let got = decoded
+                .symbol
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{}", decoded.value));
+            return Err(format!(
+                "`{}`.{} expected {}, got {}",
+                spec.message,
+                field,
+                expected.describe(),
+                got
+            ));
+        }
+    }
+    if let Some(v) = spec.greater_than {
+        if decoded.value <= v {
+            return Err(format!(
+                "`{}`.{} expected > {v}, got {}",
+                spec.message, field, decoded.value
+            ));
+        }
+    }
+    if let Some(v) = spec.less_than {
+        if decoded.value >= v {
+            return Err(format!(
+                "`{}`.{} expected < {v}, got {}",
+                spec.message, field, decoded.value
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::target::{TargetError, POLL_US};
     use embrig_core::frame::CanFrame;
+    use std::collections::BTreeMap;
+    use std::net::SocketAddr;
 
     const DBC: &str = r#"VERSION ""
 
@@ -695,5 +891,291 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         let result = run_spec(&spec, &mut target).await.unwrap();
         assert!(!result.passed);
         assert_eq!(target.elapsed_us(), 30_000);
+    }
+
+    // ---- UDP assertion helpers ----
+
+    use embrig_net::netmap::{FieldDef, FieldType, Netmap};
+
+    fn udp_netmap() -> Netmap {
+        let mut netmap = Netmap::new();
+        netmap.messages.insert(
+            "MotionState".to_string(),
+            embrig_net::MessageDef {
+                dst: "127.0.0.1:5000".parse().unwrap(),
+                length: 8,
+                fields: BTreeMap::from([
+                    (
+                        "speed".to_string(),
+                        FieldDef {
+                            offset: 0,
+                            ty: FieldType::F32le,
+                            factor: 1.0,
+                            shift: 0.0,
+                            values: BTreeMap::new(),
+                        },
+                    ),
+                    (
+                        "state".to_string(),
+                        FieldDef {
+                            offset: 4,
+                            ty: FieldType::U8,
+                            factor: 1.0,
+                            shift: 0.0,
+                            values: BTreeMap::from([(0, "STOPPED".into()), (1, "DRIVING".into())]),
+                        },
+                    ),
+                ]),
+            },
+        );
+        netmap
+    }
+
+    fn udp_message() -> MessageDef {
+        udp_netmap().message("MotionState").unwrap().clone()
+    }
+
+    fn udp_spec(field: &str) -> ExpectUdpStep {
+        ExpectUdpStep {
+            message: "MotionState".into(),
+            field: Some(field.into()),
+            ..ExpectUdpStep::default()
+        }
+    }
+
+    fn udp_datagram(speed: f32, state: u8) -> UdpDatagram {
+        let message = udp_message();
+        let payload = message
+            .encode_fields(&[
+                ("speed", SignalValue::Num(speed as f64)),
+                ("state", SignalValue::Num(state as f64)),
+            ])
+            .unwrap();
+        UdpDatagram::new("127.0.0.1:6000".parse().unwrap(), message.dst, payload)
+    }
+
+    #[test]
+    fn check_udp_equals_numeric_and_symbol() {
+        let dg = udp_datagram(1.5, 1);
+        let pass = ExpectUdpStep {
+            equals: Some(ExpectedValue::Num(1.5)),
+            ..udp_spec("speed")
+        };
+        assert!(check_udp(&pass, Some(&dg), &udp_message()).is_ok());
+        let fail = ExpectUdpStep {
+            equals: Some(ExpectedValue::Num(2.0)),
+            ..udp_spec("speed")
+        };
+        let err = check_udp(&fail, Some(&dg), &udp_message()).unwrap_err();
+        assert!(err.contains("expected 2, got 1.5"), "got: {err}");
+
+        let symbol = ExpectUdpStep {
+            equals: Some(ExpectedValue::Str("DRIVING".into())),
+            ..udp_spec("state")
+        };
+        assert!(check_udp(&symbol, Some(&dg), &udp_message()).is_ok());
+        let symbol_fail = ExpectUdpStep {
+            equals: Some(ExpectedValue::Str("STOPPED".into())),
+            ..udp_spec("state")
+        };
+        assert!(check_udp(&symbol_fail, Some(&dg), &udp_message()).is_err());
+    }
+
+    #[test]
+    fn check_udp_comparisons_and_present() {
+        let dg = udp_datagram(1.5, 0);
+        let gt = ExpectUdpStep {
+            greater_than: Some(1.0),
+            ..udp_spec("speed")
+        };
+        assert!(check_udp(&gt, Some(&dg), &udp_message()).is_ok());
+        let lt = ExpectUdpStep {
+            less_than: Some(5.0),
+            ..udp_spec("speed")
+        };
+        assert!(check_udp(&lt, Some(&dg), &udp_message()).is_ok());
+        let present = ExpectUdpStep {
+            present: Some(true),
+            ..ExpectUdpStep::default()
+        };
+        assert!(check_udp(&present, Some(&dg), &udp_message()).is_ok());
+        assert!(check_udp(&present, None, &udp_message()).is_err());
+    }
+
+    #[test]
+    fn check_udp_unknown_field() {
+        let dg = udp_datagram(1.5, 0);
+        let unknown = ExpectUdpStep {
+            equals: Some(ExpectedValue::Num(1.0)),
+            ..udp_spec("nope")
+        };
+        let err = check_udp(&unknown, Some(&dg), &udp_message()).unwrap_err();
+        assert!(err.contains("cannot decode"), "got: {err}");
+    }
+
+    /// A minimal UDP target: `poll_udp` advances time by a poll interval and
+    /// returns the most recent datagram for `dst`.
+    struct MockUdpTarget {
+        time: Timestamp,
+        netmap: Netmap,
+        visible: Vec<UdpDatagram>,
+        later: Vec<(Timestamp, UdpDatagram)>,
+    }
+
+    impl MockUdpTarget {
+        fn new() -> Self {
+            Self {
+                time: 0,
+                netmap: udp_netmap(),
+                visible: Vec::new(),
+                later: Vec::new(),
+            }
+        }
+
+        fn push_at(&mut self, dg: UdpDatagram, at_us: Timestamp) {
+            self.later.push((at_us, dg));
+        }
+
+        fn flush(&mut self) {
+            let time = self.time;
+            let mut i = 0;
+            while i < self.later.len() {
+                if self.later[i].0 <= time {
+                    let (_, dg) = self.later.remove(i);
+                    self.visible.push(dg);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    impl TestTarget for MockUdpTarget {
+        fn network(&self) -> &Network {
+            unimplemented!("no DBC network for a UDP-only mock")
+        }
+        fn elapsed_us(&self) -> Timestamp {
+            self.time
+        }
+        fn reset(&mut self) -> Result<(), TargetError> {
+            self.time = 0;
+            self.visible.clear();
+            self.later.clear();
+            Ok(())
+        }
+        fn set_signal(
+            &mut self,
+            _ecu: &str,
+            _id: u32,
+            _signal: &str,
+            _value: SignalValue,
+        ) -> Result<(), TargetError> {
+            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
+        }
+        fn add_fault(
+            &mut self,
+            _fault: Fault,
+            _start: Option<Timestamp>,
+            _duration: Option<Timestamp>,
+        ) -> Result<(), TargetError> {
+            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
+        }
+        async fn send(&mut self, _frame: CanFrame) -> Result<(), TargetError> {
+            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
+        }
+        async fn wait(&mut self, duration: Timestamp) -> Result<(), TargetError> {
+            self.time += duration;
+            self.flush();
+            Ok(())
+        }
+        async fn poll(&mut self, _id: u32) -> Result<Option<CanFrame>, TargetError> {
+            Err(TargetError::UnsupportedOnTarget("no CAN".into()))
+        }
+        fn netmap(&self) -> Option<&Netmap> {
+            Some(&self.netmap)
+        }
+        fn udp_host(&self) -> Result<SocketAddr, TargetError> {
+            Ok("127.0.0.1:5000".parse().unwrap())
+        }
+        async fn send_udp(&mut self, dg: UdpDatagram) -> Result<(), TargetError> {
+            self.visible.push(dg);
+            Ok(())
+        }
+        async fn poll_udp(&mut self, dst: SocketAddr) -> Result<Option<UdpDatagram>, TargetError> {
+            self.time += POLL_US;
+            self.flush();
+            Ok(self.visible.iter().rev().find(|d| d.dst == dst).cloned())
+        }
+    }
+
+    #[tokio::test]
+    async fn expect_udp_polls_until_message_arrives() {
+        let mut target = MockUdpTarget::new();
+        target.push_at(udp_datagram(1.5, 1), 25_000);
+        let mut s = udp_spec("speed");
+        s.equals = Some(ExpectedValue::Num(1.5));
+        s.within = Some("50ms".into());
+        evaluate_udp_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap();
+        assert!(target.elapsed_us() >= 25_000);
+    }
+
+    #[tokio::test]
+    async fn expect_udp_times_out() {
+        let mut target = MockUdpTarget::new();
+        let mut s = udp_spec("speed");
+        s.equals = Some(ExpectedValue::Num(9.0));
+        s.within = Some("50ms".into());
+        let err = evaluate_udp_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("no message `MotionState` observed"),
+            "got: {err}"
+        );
+        assert_eq!(target.elapsed_us(), 50_000);
+    }
+
+    #[tokio::test]
+    async fn expect_udp_absent_rejects_seen_message() {
+        let mut target = MockUdpTarget::new();
+        target.visible.push(udp_datagram(1.5, 1));
+        let mut s = ExpectUdpStep {
+            absent: Some(true),
+            within: Some("10ms".into()),
+            ..ExpectUdpStep::default()
+        };
+        s.message = "MotionState".into();
+        let err = evaluate_udp_expect(&s, &mut target, 1_000_000)
+            .await
+            .unwrap_err();
+        assert!(err.contains("expected no message"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn run_spec_dispatches_udp_steps() {
+        let mut target = MockUdpTarget::new();
+        let spec = TestSpec {
+            name: "udp".into(),
+            timeout: "1s".into(),
+            steps: vec![
+                Step::SendUdp {
+                    message: "MotionState".into(),
+                    fields: BTreeMap::from([("speed".into(), ExpectedValue::Num(3.0))]),
+                },
+                Step::ExpectUdp {
+                    spec: ExpectUdpStep {
+                        message: "MotionState".into(),
+                        field: Some("speed".into()),
+                        equals: Some(ExpectedValue::Num(3.0)),
+                        within: Some("1s".into()),
+                        ..ExpectUdpStep::default()
+                    },
+                },
+            ],
+        };
+        let result = run_spec(&spec, &mut target).await.unwrap();
+        assert!(result.passed, "got: {:?}", result.failures);
     }
 }

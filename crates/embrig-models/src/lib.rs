@@ -8,8 +8,8 @@ pub mod config;
 pub mod ecus;
 
 pub use config::{
-    literal_to_physical, ConfigEcu, EcuConfig, EcuKind, InterfaceConfig, SignalLiteral,
-    VehicleConfig,
+    literal_to_physical, ConfigEcu, EcuConfig, EcuKind, EthEcuConfig, EthEcuKind, InterfaceConfig,
+    NetworkConfig, SignalLiteral, VehicleConfig,
 };
 pub use ecus::{
     Charger, Motor, VehicleController, ID_BATTERY, ID_BRAKE, ID_CHARGE_REQUEST, ID_CHARGE_STATUS,

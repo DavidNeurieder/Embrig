@@ -4,8 +4,12 @@
 //! the list of vECUs. The "config" ECU kind transmits a fixed message on a
 //! fixed period, with signal values that can be overridden at runtime (used
 //! by the battery, brake pedal and driver-request nodes).
+//!
+//! Ethernet-only vehicles omit `dbc` entirely and instead list UDP config
+//! ECUs under `eth_ecus` and their networks under `networks`.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 
 use embrig_core::frame::CanFrame;
 use embrig_core::signal::SignalValue;
@@ -23,12 +27,21 @@ const DEFAULT_STEP_BUDGET_US: u64 = 100_000;
 pub struct VehicleConfig {
     pub name: String,
     /// Path to the DBC file (relative to the vehicle.yaml location).
+    ///
+    /// Ethernet-only projects (no CAN bus) omit this field entirely.
+    #[serde(default)]
     pub dbc: String,
     /// Simulation step in microseconds.
     #[serde(default = "default_step_us")]
     pub step_us: u64,
     #[serde(default)]
     pub ecus: Vec<EcuConfig>,
+    /// Ethernet vECUs (UDP networks).
+    #[serde(default)]
+    pub eth_ecus: Vec<EthEcuConfig>,
+    /// Ethernet networks (UDP) referenced by `interfaces`.
+    #[serde(default)]
+    pub networks: Vec<NetworkConfig>,
     #[serde(default)]
     pub interfaces: Vec<InterfaceConfig>,
 }
@@ -83,6 +96,56 @@ pub enum SignalLiteral {
     Str(String),
 }
 
+/// A single Ethernet (UDP) vECU entry in `vehicle.yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EthEcuConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: EthEcuKind,
+    /// This ECU's socket address; datagrams destined to it are delivered here.
+    pub address: SocketAddr,
+    /// For `udp-config` ECUs: name of the netmap message to transmit.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Transmit period in microseconds.
+    #[serde(default = "default_period_us")]
+    pub period_us: u64,
+    /// Initial physical field values (numeric or symbolic).
+    #[serde(default)]
+    pub fields: BTreeMap<String, SignalLiteral>,
+    /// Wall-clock budget (µs) allowed for one simulated step of this ECU
+    /// (`udp-sil` nodes only). Exceeding it fails the test.
+    #[serde(default = "default_step_budget_us")]
+    pub step_budget_us: u64,
+}
+
+/// Which built-in behaviour an Ethernet vECU implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EthEcuKind {
+    /// Fixed netmap messages with runtime-overridable fields.
+    #[serde(rename = "udp-config")]
+    UdpConfig,
+    /// The system under test for software-in-the-loop: firmware compiled for
+    /// the host, bound in code via a [`UdpEcuFactory`] (from `embrig-net`).
+    #[serde(rename = "udp-sil")]
+    UdpSil,
+}
+
+/// An Ethernet network of a vehicle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    pub name: String,
+    /// `udp` (the only kind today).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The host (test rig) endpoint. Tests bind here; received telemetry is
+    /// destined to this address.
+    pub host: SocketAddr,
+    /// Path to the netmap file, relative to the vehicle.yaml location.
+    pub netmap: String,
+}
+
 /// A target the simulation can be connected to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceConfig {
@@ -112,6 +175,8 @@ impl VehicleConfig {
             dbc: String::new(),
             step_us: DEFAULT_STEP_US,
             ecus: Vec::new(),
+            eth_ecus: Vec::new(),
+            networks: Vec::new(),
             interfaces: Vec::new(),
         }
     }
@@ -300,5 +365,48 @@ mod tests {
                 "unknown symbol `NOPE` for `state`".into()
             ))
         );
+    }
+
+    #[test]
+    fn parses_ethernet_only_vehicle() {
+        let cfg: VehicleConfig = serde_saphyr::from_str(
+            r#"
+name: rover
+step_us: 1000
+eth_ecus:
+  - name: joystick
+    type: udp-config
+    address: 192.168.1.20:6000
+    message: Joystick
+    period_us: 20000
+  - name: motion
+    type: udp-sil
+    address: 192.168.1.30:5000
+    step_budget_us: 100000
+networks:
+  - name: eth
+    type: udp
+    host: 192.168.1.10:5000
+    netmap: netmap.yaml
+interfaces:
+  - name: virtual
+    type: virtual
+  - name: udp
+    type: udp
+"#,
+        )
+        .unwrap();
+        assert!(cfg.dbc.is_empty());
+        assert_eq!(cfg.eth_ecus.len(), 2);
+        assert_eq!(
+            cfg.eth_ecus[0].address,
+            "192.168.1.20:6000".parse().unwrap()
+        );
+        assert_eq!(cfg.eth_ecus[0].kind, EthEcuKind::UdpConfig);
+        assert_eq!(cfg.eth_ecus[1].kind, EthEcuKind::UdpSil);
+        assert_eq!(cfg.networks[0].kind, "udp");
+        assert_eq!(cfg.networks[0].host, "192.168.1.10:5000".parse().unwrap());
+        assert_eq!(cfg.eth_ecus[0].period_us, 20_000);
+        assert_eq!(cfg.eth_ecus[1].step_budget_us, 100_000);
     }
 }

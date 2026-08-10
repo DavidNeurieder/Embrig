@@ -85,6 +85,13 @@ fn cmd_init(dir: &Path, force: bool) -> Result<i32> {
 fn cmd_simulate(vehicle: &Path, duration: &str, verbose: bool) -> Result<i32> {
     let (config, dbc_path) = load_vehicle_config(vehicle)
         .with_context(|| format!("cannot load `{}`", vehicle.display()))?;
+    if config.dbc.is_empty() {
+        bail!(
+            "`simulate` runs the CAN simulation and needs a DBC; `{}` has no `dbc` \
+             (Ethernet traffic is exercised by the UDP test targets)",
+            vehicle.display()
+        );
+    }
     if !dbc_path.exists() {
         bail!("DBC file `{}` not found", dbc_path.display());
     }
@@ -125,7 +132,7 @@ async fn cmd_test(
 ) -> Result<i32> {
     let (config, dbc_path) = load_vehicle_config(vehicle)
         .with_context(|| format!("cannot load `{}`", vehicle.display()))?;
-    if !dbc_path.exists() {
+    if !config.dbc.is_empty() && !dbc_path.exists() {
         bail!("DBC file `{}` not found", dbc_path.display());
     }
     let vehicle_dir = vehicle
@@ -150,10 +157,15 @@ async fn cmd_test(
     };
     let label = vehicle.display().to_string();
 
-    let target = select_target(&config, &dbc_path, interface)?;
+    let target = select_target(&config, &dbc_path, &vehicle_dir, interface)?;
 
     let suite = match target {
         Target::Virtual(mut target) => {
+            let suite = embrig_test::run_suite(&mut *target, &files, &label).await?;
+            print_suite(&suite);
+            suite
+        }
+        Target::Udp(mut target) => {
             let suite = embrig_test::run_suite(&mut *target, &files, &label).await?;
             print_suite(&suite);
             suite
@@ -195,6 +207,7 @@ fn cmd_report(input: &Path, output: Option<&Path>, format: &str) -> Result<i32> 
 /// The target a test suite runs against.
 enum Target {
     Virtual(Box<embrig_test::VirtualTarget>),
+    Udp(Box<embrig_test::UdpTarget>),
     #[cfg(feature = "socketcan")]
     Hardware(embrig_test::target::HardwareTarget),
 }
@@ -202,6 +215,7 @@ enum Target {
 fn select_target(
     config: &VehicleConfig,
     dbc_path: &Path,
+    vehicle_dir: &Path,
     interface: Option<&str>,
 ) -> Result<Target> {
     let kind = match interface {
@@ -223,6 +237,25 @@ fn select_target(
                 )
             })?;
             Ok(Target::Virtual(Box::new(target)))
+        }
+        "udp" => {
+            let net_config = config
+                .networks
+                .iter()
+                .find(|n| n.kind == "udp")
+                .ok_or_else(|| anyhow::anyhow!("vehicle.yaml has no network of type `udp`"))?;
+            let netmap_path = vehicle_dir.join(&net_config.netmap);
+            if !netmap_path.exists() {
+                bail!("netmap file `{}` not found", netmap_path.display());
+            }
+            let target = embrig_test::UdpTarget::new(config, net_config, &netmap_path)
+                .with_context(|| {
+                    format!(
+                        "cannot build UDP simulation from `{}`",
+                        netmap_path.display()
+                    )
+                })?;
+            Ok(Target::Udp(Box::new(target)))
         }
         "socketcan" => {
             #[cfg(feature = "socketcan")]
@@ -258,7 +291,7 @@ fn select_target(
                 interface.unwrap_or("sil")
             )
         }
-        other => bail!("unknown interface type `{other}` (use virtual or socketcan)"),
+        other => bail!("unknown interface type `{other}` (use virtual, udp or socketcan)"),
     }
 }
 

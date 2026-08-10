@@ -220,6 +220,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "embrig-net"
+version = "0.1.0"
+dependencies = [
+ "embrig-core",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "embrig-sil"
 version = "0.1.0"
 dependencies = [
@@ -241,6 +250,7 @@ dependencies = [
  "embrig-core",
  "embrig-dbc",
  "embrig-models",
+ "embrig-net",
  "serde",
  "serde-saphyr",
  "serde_json",

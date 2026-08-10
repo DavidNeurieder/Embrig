@@ -43,12 +43,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Guides** — `how_to/how-to-sil-test.md` (wrap existing Rust firmware as the
     system under test) and `how_to/how-to-hil-test.md` (run the same suites
     against a real ECU over SocketCAN), linked from the README and the website.
+  - **Ethernet (UDP) transport** — a second test transport beside CAN, running
+    the same YAML suites over IP:
+    - **`embrig-net`** — deterministic virtual UDP network: a **netmap** codec
+      (messages keyed by destination endpoint, named fields at byte offsets:
+      `u8`/`bool`/`u16le`/`u16be`/`u32le`/`u32be`/`i16le`/`i32le`/`f32le`/`f64le`,
+      scaling and symbolic values), `UdpDatagram`, the `UdpEcu` trait,
+      config-driven ECUs (`UdpConfigEcu`), a factory registry with step budgets
+      (`UdpRegistry`/`UdpEcuFactory`), routing by endpoint, fault injection
+      (drop/delay/corrupt), and an event recorder — transport-only with no
+      tokio/serde-saphyr/test dependencies.
+    - **`embrig-test::udp`** — `UdpTarget` (virtual), `UdpSutTarget` (host-compiled
+      firmware via `udp-sil` nodes), `UdpHardwareTarget` (a bound UDP socket on a
+      real link), and the `udp_run` / `udp_run_with_firmware` helpers.
+    - **New DSL steps** — `send_udp`, `set_field`, `expect_udp`, `fault_udp`,
+      validated by `load_spec` with clear error messages.
+    - `embrig-models` — `EthEcuConfig`/`EthEcuKind` (`udp-config`/`udp-sil`) and
+      `NetworkConfig` in `vehicle.yaml`; `dbc` is now optional (`serde(default)`)
+      so vehicles can be pure-Ethernet.
+    - CLI: `--interface udp` selects the UDP virtual target; DBC loading is
+      skipped for vehicles without a `dbc` field.
+    - **`crates/embrig-test/examples/rover/`** — Ethernet rover demo (netmap +
+      vehicle + suites for telemetry, field overrides, drop/corrupt fault
+      recovery), `udp_rover` example passes `4/4`.
+    - **Guides** — `how_to/how-to-udp-test.md` (netmap instead of DBC,
+      `eth_ecus`/`networks`, the UDP steps, real-socket targets), linked from
+      the README and the website.
 
 ### Changed
 
 - `embrig-test::TargetError` gains `UnsupportedOnSut` and `SutTimeout`.
 - `embrig-core::EcuError` gains `NotRegistered` for unregistered SIL firmware.
-- Test count updated in docs (91 total, incl. 10 CLI black-box).
+- `embrig-test::TargetError` gains `UnsupportedOnTarget` and `Net`; the
+  `TestTarget` trait gains default UDP methods (`netmap`, `udp_host`,
+  `send_udp`, `poll_udp`, `set_field`, `add_fault_udp`) and `TestError` gains a
+  `Message` variant.
+- Test count updated in docs (130 total, incl. 10 CLI black-box).
 
 ## [0.1.0] - 2026-08-10
 

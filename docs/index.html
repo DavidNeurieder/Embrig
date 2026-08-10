@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Embrig — Deterministic embedded CAN testing, SIL to HIL</title>
-  <meta name="description" content="Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run them identically against host-compiled firmware (SIL), a deterministic virtual simulation, or a real bus over SocketCAN. Deterministic, no flaky tests.">
+  <title>Embrig — Deterministic embedded CAN & Ethernet testing, SIL to HIL</title>
+  <meta name="description" content="Define any CAN network with a DBC file — or an Ethernet network with a netmap — and YAML, write test suites in plain YAML, and run them identically against host-compiled firmware (SIL), a deterministic virtual simulation, or a real bus over SocketCAN. Deterministic, no flaky tests.">
   <link rel="canonical" href="https://davidneurieder.github.io/embrig/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Embrig">
-  <meta property="og:title" content="Embrig — Deterministic embedded CAN testing, SIL to HIL">
-  <meta property="og:description" content="Deterministic embedded CAN testing. The same YAML tests run against host-compiled firmware (SIL), a virtual network, or a real bus over SocketCAN.">
+  <meta property="og:title" content="Embrig — Deterministic embedded CAN & Ethernet testing, SIL to HIL">
+  <meta property="og:description" content="Deterministic embedded testing. The same YAML tests run against host-compiled firmware (SIL), a virtual network, a real CAN bus over SocketCAN, or a UDP network.">
   <meta property="og:url" content="https://davidneurieder.github.io/embrig/">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Embrig — Deterministic embedded CAN testing, SIL to HIL">
-  <meta name="twitter:description" content="The same YAML tests run against host-compiled firmware (SIL), a virtual network, or a real bus over SocketCAN. Deterministic, no flaky tests.">
+  <meta name="twitter:title" content="Embrig — Deterministic embedded CAN & Ethernet testing, SIL to HIL">
+  <meta name="twitter:description" content="The same YAML tests run against host-compiled firmware (SIL), a virtual network, a real CAN bus over SocketCAN, or a UDP network. Deterministic, no flaky tests.">
   <link rel="stylesheet" href="styles.css">
   <script type="application/ld+json">
   {
@@ -22,7 +22,7 @@
     "name": "Embrig",
     "operatingSystem": "Linux, macOS, Windows",
     "applicationCategory": "DeveloperApplication",
-    "description": "Deterministic embedded CAN testing: run YAML test suites against host-compiled firmware (SIL), a virtual network, or a real bus over SocketCAN.",
+    "description": "Deterministic embedded CAN & Ethernet testing: run YAML test suites against host-compiled firmware (SIL), a virtual network, a real bus over SocketCAN, or a UDP network.",
     "url": "https://davidneurieder.github.io/embrig/",
     "softwareVersion": "0.1.0",
     "license": "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -37,9 +37,9 @@
         <i class="node a"></i>
         <i class="node b"></i>
       </div>
-      <span class="eyebrow">Rust · CAN · Deterministic</span>
+      <span class="eyebrow">Rust · CAN · UDP · Deterministic</span>
       <h1>Embrig</h1>
-      <p class="lead">Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run the <strong>same suite</strong> against host-compiled firmware (SIL), a deterministic virtual simulation on your laptop, or a real bus over SocketCAN.</p>
+      <p class="lead">Define any CAN network with a DBC file — or an Ethernet network with a netmap — write test suites in plain YAML, and run the <strong>same suite</strong> against host-compiled firmware (SIL), a deterministic virtual simulation on your laptop, a real bus over SocketCAN, or a UDP network.</p>
       <div class="cta">
         <a class="btn btn-primary" href="#get-started">Get started</a>
         <a class="btn btn-ghost" href="https://github.com/DavidNeurieder/embrig">View source</a>
@@ -60,18 +60,18 @@
           </div>
           <div class="card">
             <div class="icon">🔁</div>
-            <h3>One suite, three targets</h3>
-            <p>The same YAML tests drive host-compiled firmware (SIL), the virtual simulation on your laptop, or a live CAN bus over SocketCAN — without rewriting anything.</p>
+            <h3>One suite, many targets</h3>
+            <p>The same YAML tests drive host-compiled firmware (SIL), the virtual simulation on your laptop, a live CAN bus over SocketCAN, or an Ethernet (UDP) network — without rewriting anything.</p>
           </div>
           <div class="card">
             <div class="icon">📐</div>
-            <h3>DBC native</h3>
-            <p>Parse <code>BO_</code>/<code>SG_</code>/<code>VAL_</code> with Intel/Motorola byte order, signed values, factor/offset scaling and symbolic value tables.</p>
+            <h3>DBC and netmap native</h3>
+            <p>Parse <code>BO_</code>/<code>SG_</code>/<code>VAL_</code> for CAN, or a netmap of named fields at byte offsets for UDP — Intel/Motorola byte order, signed values, scaling and symbolic value tables.</p>
           </div>
           <div class="card">
             <div class="icon">🧪</div>
             <h3>YAML test DSL</h3>
-            <p><code>send</code>, <code>set_signal</code>, <code>wait</code>, <code>expect</code>, <code>fault</code>. Assert <code>equals</code>, <code>greater_than</code>, <code>less_than</code>, <code>present</code>, <code>absent</code> within <code>us</code>/<code>ms</code>/<code>s</code> deadlines.</p>
+            <p><code>send</code>, <code>set_signal</code>, <code>wait</code>, <code>expect</code>, <code>fault</code> — plus <code>send_udp</code>, <code>set_field</code>, <code>expect_udp</code>, <code>fault_udp</code> for Ethernet. Assert <code>equals</code>, <code>greater_than</code>, <code>less_than</code>, <code>present</code>, <code>absent</code> within <code>us</code>/<code>ms</code>/<code>s</code> deadlines.</p>
           </div>
           <div class="card">
             <div class="icon">📊</div>
@@ -116,7 +116,7 @@
             <span class="num">4</span>
             <div>
               <h3>Re-run against real hardware</h3>
-              <p>The identical suite drives a physical ECU over SocketCAN. No router in the loop: <code>set_signal</code> and <code>fault</code> are rejected with a clear error, not silently ignored.</p>
+              <p>The identical suite drives a physical ECU over SocketCAN, or talks to Ethernet nodes over a real UDP socket. No router in the loop: <code>set_signal</code>, <code>set_field</code> and <code>fault</code> are rejected with a clear error, not silently ignored.</p>
             </div>
           </div>
         </div>
@@ -191,6 +191,10 @@ cargo run --example sil_firmware --package embrig-sil
 cargo run --example robot_sil --package embrig-sil
 # → 4 passed, 0 failed
 
+# … or the Ethernet rover: telemetry, overrides, drop/corrupt faults
+cargo run --example udp_rover --package embrig-test
+# → 4 passed, 0 failed
+
 # Scaffold your own project
 cargo run --bin embrig -- init my-project
 cargo run --bin embrig -- test my-project/vehicle.yaml
@@ -218,13 +222,14 @@ steps:
         <div class="centered-code">
           <pre class="code-block"><code>cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --features socketcan   # 91 tests, incl. 10 CLI black-box
+cargo test --workspace --features socketcan   # 130 tests, incl. 10 CLI black-box
 cargo run --example sil_firmware --package embrig-sil
 cargo run --example robot_sil --package embrig-sil
+cargo run --example udp_rover --package embrig-test
 scripts/vcan-smoke.sh           # optional: exercise the real SocketCAN path on vcan0</code></pre>
         </div>
 
-        <p class="center">Guides: <a href="https://github.com/DavidNeurieder/embrig/blob/main/how_to/how-to-sil-test.md">how to SIL-test your firmware</a> · <a href="https://github.com/DavidNeurieder/embrig/blob/main/how_to/how-to-hil-test.md">how to HIL-test your firmware</a></p>
+        <p class="center">Guides: <a href="https://github.com/DavidNeurieder/embrig/blob/main/how_to/how-to-sil-test.md">how to SIL-test your firmware</a> · <a href="https://github.com/DavidNeurieder/embrig/blob/main/how_to/how-to-hil-test.md">how to HIL-test your firmware</a> · <a href="https://github.com/DavidNeurieder/embrig/blob/main/how_to/how-to-udp-test.md">how to test Ethernet (UDP) nodes</a></p>
       </div>
     </section>
   </main>

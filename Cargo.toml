@@ -7,6 +7,7 @@ members = [
     "crates/embrig-can",
     "crates/embrig-test",
     "crates/embrig-sil",
+    "crates/embrig-net",
     "crates/embrig-cli",
 ]
 
@@ -23,12 +24,13 @@ embrig-models = { path = "crates/embrig-models" }
 embrig-can = { path = "crates/embrig-can" }
 embrig-test = { path = "crates/embrig-test" }
 embrig-sil = { path = "crates/embrig-sil" }
+embrig-net = { path = "crates/embrig-net" }
 
 serde = "1.0.229"
 serde_json = "1.0"
 serde-saphyr = "1.0.1"
 thiserror = "2.0.19"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 clap = { version = "4.6.6", features = ["derive"] }
 anyhow = "1.0.104"
 socketcan = { version = "3.6.2", features = ["tokio"] }

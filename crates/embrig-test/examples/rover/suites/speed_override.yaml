@@ -1,0 +1,6 @@
+name: speed_override
+timeout: 5s
+steps:
+  - set_field: { ecu: motion, message: MotionState, field: speed, value: 3.0 }
+  - wait: { time: 60ms }
+  - expect_udp: { message: MotionState, field: speed, equals: 3.0, within: 1s }

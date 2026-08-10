@@ -9,6 +9,7 @@ embrig-core = { workspace = true }
 embrig-dbc = { workspace = true }
 embrig-models = { workspace = true }
 embrig-can = { workspace = true }
+embrig-net = { workspace = true }
 serde = { workspace = true }
 serde-saphyr = { workspace = true }
 serde_json = { workspace = true }

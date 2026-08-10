@@ -1,0 +1,24 @@
+name: rover
+step_us: 1000
+eth_ecus:
+  - name: joystick
+    type: udp-config
+    address: 192.168.1.20:6000
+    message: DriveCommand
+    period_us: 20000
+  - name: motion
+    type: udp-config
+    address: 192.168.1.30:5000
+    message: MotionState
+    period_us: 50000
+    fields:
+      speed: 0.0
+      state: STOPPED
+networks:
+  - name: eth
+    type: udp
+    host: 192.168.1.10:5000
+    netmap: netmap.yaml
+interfaces:
+  - name: udp
+    type: udp

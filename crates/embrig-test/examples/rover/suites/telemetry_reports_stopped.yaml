@@ -1,0 +1,5 @@
+name: telemetry_reports_stopped
+timeout: 5s
+steps:
+  - wait: { time: 60ms }
+  - expect_udp: { message: MotionState, field: state, equals: "STOPPED", within: 1s }

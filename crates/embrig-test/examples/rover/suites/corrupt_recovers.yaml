@@ -1,0 +1,6 @@
+name: corrupt_recovers
+timeout: 5s
+steps:
+  - fault_udp: { type: corrupt, message: MotionState, byte: 4, mask: 255, duration: 200ms }
+  - wait: { time: 60ms }
+  - expect_udp: { message: MotionState, field: state, equals: "STOPPED", within: 1s }

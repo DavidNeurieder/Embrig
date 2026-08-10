@@ -1,0 +1,11 @@
+[package]
+name = "embrig-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ethernet (UDP/IP) for Embrig: netmap field codec, deterministic virtual network, and virtual + hardware targets"
+
+[dependencies]
+embrig-core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }

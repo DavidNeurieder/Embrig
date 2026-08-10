@@ -20,8 +20,13 @@ pub mod dsl;
 pub mod report;
 pub mod runner;
 pub mod target;
+pub mod udp;
 
 pub use dsl::{load_spec, parse_duration, ExpectStep, ExpectedValue, FaultKind, Step, TestSpec};
 pub use report::{html, json, load_json, write_report, SuiteResult, TestResult};
 pub use runner::{run_spec, run_suite, TestError};
 pub use target::{TargetError, TestTarget, VirtualTarget};
+pub use udp::{
+    build_udp_simulation, build_udp_simulation_with, udp_run, udp_run_with_firmware, BuiltUdpSim,
+    UdpError, UdpHardwareTarget, UdpSutTarget, UdpTarget,
+};

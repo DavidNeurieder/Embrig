@@ -45,6 +45,10 @@ jobs:
         run: |
           cargo run -q --example robot_sil --package embrig-sil
 
+      - name: UDP rover example
+        run: |
+          cargo run -q --example udp_rover --package embrig-test
+
   socketcan-build:
     name: socketcan feature build
     runs-on: ubuntu-latest

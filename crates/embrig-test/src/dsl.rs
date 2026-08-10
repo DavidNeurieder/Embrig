@@ -1,5 +1,6 @@
 //! The YAML test DSL: parsing and validation of test files.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use embrig_core::time::{Timestamp, US_PER_MS, US_PER_S};
@@ -60,6 +61,58 @@ pub enum Step {
         #[serde(default)]
         duration: Option<String>,
     },
+    /// Send a UDP datagram: the netmap message `message`, encoded from
+    /// `fields`, sent from the host to the message's destination.
+    SendUdp {
+        message: String,
+        /// Field values to encode (numeric, boolean or symbolic). Omitted
+        /// fields are zero.
+        #[serde(default)]
+        fields: BTreeMap<String, ExpectedValue>,
+    },
+    /// Override a field of a UDP message on a config ECU.
+    SetField {
+        ecu: String,
+        message: String,
+        field: String,
+        value: ExpectedValue,
+    },
+    /// Assert a condition on a received UDP message.
+    ExpectUdp {
+        #[serde(flatten)]
+        spec: ExpectUdpStep,
+    },
+    /// Inject a fault on a UDP message's destination endpoint.
+    FaultUdp {
+        #[serde(rename = "type")]
+        kind: UdpFaultKind,
+        message: String,
+        /// Delay amount for `delay` faults (e.g. `5ms`).
+        #[serde(default)]
+        delay: Option<String>,
+        /// Byte index for `corrupt` faults.
+        #[serde(default)]
+        byte: Option<usize>,
+        /// Bit mask for `corrupt` faults.
+        #[serde(default)]
+        mask: Option<u8>,
+        #[serde(default)]
+        start: Option<String>,
+        #[serde(default)]
+        duration: Option<String>,
+    },
+}
+
+/// A UDP fault kind, matching the fault model of `embrig-net`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UdpFaultKind {
+    /// Suppress every datagram for the message's destination.
+    Drop,
+    /// Hold datagrams back by a fixed delay (see the `delay` field).
+    Delay,
+    /// Flip bits in one byte of every datagram (see `byte`/`mask`).
+    Corrupt,
 }
 
 /// A fault kind, matching the fault model of `embrig-core`.
@@ -157,6 +210,68 @@ impl ExpectStep {
     }
 }
 
+/// The fields of an `expect_udp` step. Exactly one of
+/// `equals`/`greater_than`/`less_than`/`present` must be set.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExpectUdpStep {
+    /// Netmap message name; its destination endpoint identifies the traffic.
+    pub message: String,
+    /// Field name to assert on (required unless `present` is used).
+    #[serde(default)]
+    pub field: Option<String>,
+    #[serde(default)]
+    pub equals: Option<ExpectedValue>,
+    #[serde(default)]
+    pub greater_than: Option<f64>,
+    #[serde(default)]
+    pub less_than: Option<f64>,
+    /// `present: true` — a datagram for the message's destination must appear
+    /// within `within`; `present: false` — it must not appear.
+    #[serde(default)]
+    pub present: Option<bool>,
+    /// Alias for `present` with inverted polarity.
+    #[serde(default)]
+    pub absent: Option<bool>,
+    /// Time budget to poll within (e.g. `1s`).
+    #[serde(default)]
+    pub within: Option<String>,
+}
+
+impl ExpectUdpStep {
+    /// The effective `present` semantics, merging the `absent` alias.
+    pub fn effective_present(&self) -> Option<bool> {
+        match self.absent {
+            Some(v) => Some(!v),
+            None => self.present,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DslError> {
+        let ops = usize::from(self.equals.is_some())
+            + usize::from(self.greater_than.is_some())
+            + usize::from(self.less_than.is_some())
+            + usize::from(self.present.is_some())
+            + usize::from(self.absent.is_some());
+        if ops != 1 {
+            return Err(DslError::BadExpectUdp {
+                message: self.message.clone(),
+                message2: "exactly one of equals/greater_than/less_than/present/absent must be set"
+                    .into(),
+            });
+        }
+        if self.present.is_none() && self.absent.is_none() && self.field.is_none() {
+            return Err(DslError::BadExpectUdp {
+                message: self.message.clone(),
+                message2: "a field name is required unless `present` or `absent` is used".into(),
+            });
+        }
+        if let Some(w) = &self.within {
+            parse_duration(w)?;
+        }
+        Ok(())
+    }
+}
+
 /// Parse a duration string like `250us`, `10ms` or `2s` into microseconds.
 pub fn parse_duration(input: &str) -> Result<Timestamp, DslError> {
     let input = input.trim();
@@ -191,6 +306,8 @@ pub enum DslError {
     Load { path: String, message: String },
     #[error("invalid expect step for id 0x{id:03X}: {message}")]
     BadExpect { id: u32, message: String },
+    #[error("invalid expect_udp step for message `{message}`: {message2}")]
+    BadExpectUdp { message: String, message2: String },
     #[error("invalid `{kind}` fault: {message}")]
     BadFault { kind: String, message: String },
 }
@@ -207,6 +324,9 @@ pub fn load_spec(path: &Path) -> Result<TestSpec, DslError> {
     })?;
     for step in &spec.steps {
         if let Step::Expect { spec } = step {
+            spec.validate()?;
+        }
+        if let Step::ExpectUdp { spec } = step {
             spec.validate()?;
         }
         if let Step::Wait { time } = step {
@@ -242,6 +362,41 @@ pub fn load_spec(path: &Path) -> Result<TestSpec, DslError> {
                     })
                 }
                 FaultKind::Delay => {
+                    parse_duration(delay.as_deref().unwrap())?;
+                }
+                _ => {}
+            }
+        }
+        if let Step::FaultUdp {
+            kind,
+            delay,
+            byte,
+            mask,
+            start,
+            duration,
+            ..
+        } = step
+        {
+            if let Some(d) = duration {
+                parse_duration(d)?;
+            }
+            if let Some(s) = start {
+                parse_duration(s)?;
+            }
+            match kind {
+                UdpFaultKind::Delay if delay.is_none() => {
+                    return Err(DslError::BadFault {
+                        kind: "delay".into(),
+                        message: "a `delay` duration is required".into(),
+                    })
+                }
+                UdpFaultKind::Corrupt if byte.is_none() || mask.is_none() => {
+                    return Err(DslError::BadFault {
+                        kind: "corrupt".into(),
+                        message: "both `byte` and `mask` are required".into(),
+                    })
+                }
+                UdpFaultKind::Delay => {
                     parse_duration(delay.as_deref().unwrap())?;
                 }
                 _ => {}
@@ -347,5 +502,52 @@ steps:
         assert_eq!(parse_duration("2s").unwrap(), 2 * US_PER_S);
         assert!(parse_duration("5").is_err());
         assert!(parse_duration("1m").is_err());
+    }
+
+    #[test]
+    fn parses_udp_steps() {
+        let path = write_tmp(
+            "udp.yaml",
+            r#"
+name: udp_demo
+timeout: 5s
+steps:
+  - send_udp: { message: DriveCommand, fields: { forward: 2.0, estop: false } }
+  - set_field: { ecu: joystick, message: DriveCommand, field: forward, value: 1.5 }
+  - expect_udp: { message: MotionState, field: speed, greater_than: 1.0, within: 1s }
+  - expect_udp: { message: MotionState, field: state, equals: "DRIVING" }
+  - expect_udp: { message: MotionState, present: true }
+  - fault_udp: { type: drop, message: MotionState, duration: 100ms }
+  - fault_udp: { type: delay, message: MotionState, delay: 5ms, duration: 20ms }
+  - fault_udp: { type: corrupt, message: MotionState, byte: 0, mask: 0xFF }
+"#,
+        );
+        let spec = load_spec(&path).unwrap();
+        assert_eq!(spec.steps.len(), 8);
+        match &spec.steps[0] {
+            Step::SendUdp { message, fields } => {
+                assert_eq!(message, "DriveCommand");
+                assert_eq!(fields.len(), 2);
+            }
+            other => panic!("expected SendUdp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_ambiguous_expect_udp() {
+        let path = write_tmp(
+            "bad-udp.yaml",
+            "name: bad\nsteps:\n  - expect_udp: { message: M, field: a, equals: 1, present: true }\n",
+        );
+        assert!(load_spec(&path).is_err());
+    }
+
+    #[test]
+    fn rejects_udp_fault_missing_delay() {
+        let path = write_tmp(
+            "bad-fault-udp.yaml",
+            "name: bad\nsteps:\n  - fault_udp: { type: delay, message: M }\n",
+        );
+        assert!(load_spec(&path).is_err());
     }
 }

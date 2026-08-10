@@ -1,0 +1,7 @@
+name: drop_recovers
+timeout: 5s
+steps:
+  - fault_udp: { type: drop, message: MotionState, duration: 200ms }
+  - wait: { time: 60ms }
+  - expect_udp: { message: MotionState, present: false, within: 100ms }
+  - expect_udp: { message: MotionState, field: state, equals: "STOPPED", within: 1s }
