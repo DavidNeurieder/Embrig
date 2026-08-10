@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenHIL — Deterministic hardware-in-the-loop CAN testing</title>
-  <meta name="description" content="Run a virtual EV powertrain on any laptop, inject faults, get a report that explains each failure — then run the same YAML tests against a real ECU over SocketCAN. Deterministic, no flaky tests.">
+  <meta name="description" content="Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run them identically against a deterministic virtual simulation or a real bus over SocketCAN. Deterministic, no flaky tests.">
   <link rel="canonical" href="https://davidneurieder.github.io/openhil/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="OpenHIL">
   <meta property="og:title" content="OpenHIL — Deterministic hardware-in-the-loop CAN testing">
-  <meta property="og:description" content="Deterministic hardware-in-the-loop CAN testing. The same YAML tests run on a virtual EV powertrain or a real ECU over SocketCAN.">
+  <meta property="og:description" content="Deterministic hardware-in-the-loop CAN testing. The same YAML tests run on a virtual network or a real bus over SocketCAN.">
   <meta property="og:url" content="https://davidneurieder.github.io/openhil/">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="OpenHIL — Deterministic hardware-in-the-loop CAN testing">
-  <meta name="twitter:description" content="The same YAML tests run on a virtual EV powertrain or a real ECU over SocketCAN. Deterministic, no flaky tests.">
+  <meta name="twitter:description" content="The same YAML tests run on a virtual network or a real bus over SocketCAN. Deterministic, no flaky tests.">
   <link rel="stylesheet" href="styles.css">
   <script type="application/ld+json">
   {
@@ -22,7 +22,7 @@
     "name": "OpenHIL",
     "operatingSystem": "Linux, macOS, Windows",
     "applicationCategory": "DeveloperApplication",
-    "description": "Deterministic hardware-in-the-loop CAN testing: run YAML test suites against a virtual EV powertrain or a real ECU over SocketCAN.",
+    "description": "Deterministic hardware-in-the-loop CAN testing: run YAML test suites against a virtual network or a real bus over SocketCAN.",
     "url": "https://davidneurieder.github.io/openhil/",
     "softwareVersion": "0.1.0",
     "license": "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -39,7 +39,7 @@
       </div>
       <span class="eyebrow">Rust · CAN · Deterministic</span>
       <h1>OpenHIL</h1>
-      <p class="lead">Run a virtual EV powertrain on any laptop, inject faults, and get a report that explains each failure — then run the <strong>same YAML tests</strong> against a real ECU over SocketCAN.</p>
+      <p class="lead">Define any CAN network with a DBC file and YAML, write test suites in plain YAML, and run the <strong>same suite</strong> against a deterministic virtual simulation on your laptop or a real bus over SocketCAN.</p>
       <div class="cta">
         <a class="btn btn-primary" href="#get-started">Get started</a>
         <a class="btn btn-ghost" href="https://github.com/DavidNeurieder/openhil">View source</a>
@@ -101,8 +101,8 @@
           <div class="step">
             <span class="num">2</span>
             <div>
-              <h3>Run them on a virtual powertrain</h3>
-              <p>A deterministic EV simulator — charger, VCU, motor — runs on any laptop. Inject overvoltage, brake presses, dropped frames.</p>
+              <h3>Run them on a virtual network</h3>
+              <p>A deterministic simulator of your network — nodes defined in YAML or Rust — runs on any laptop. The bundle includes an EV powertrain demo: inject overvoltage, brake presses, dropped frames.</p>
             </div>
           </div>
           <div class="step">

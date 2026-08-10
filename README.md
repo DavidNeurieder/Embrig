@@ -1,9 +1,11 @@
 # OpenHIL
 
-Deterministic hardware-in-the-loop CAN testing for students and engineers. Run
-a virtual EV powertrain on any laptop, inject faults, get a report that
-explains each failure — then run the **same YAML tests** against a real ECU
-over SocketCAN.
+Deterministic hardware-in-the-loop testing for CAN networks. Describe your bus
+with a DBC file and a `vehicle.yaml` (config-driven nodes, or your own Rust
+ECUs), write test suites as plain YAML, and run the **same suite** against a
+built-in virtual simulation or a real CAN interface via SocketCAN.
+
+The bundled EV powertrain example needs no CAN hardware to get started:
 
 ```sh
 cargo run --bin openhil -- test examples/ev-powertrain/vehicle.yaml
@@ -20,19 +22,30 @@ A Cargo workspace with six crates:
 | --- | --- |
 | `openhil-core` | deterministic virtual CAN simulation: `CanFrame`, integer-µs clock, `Ecu` trait, routing, fault injection, event recorder |
 | `openhil-dbc` | DBC parser (`BO_`/`SG_`/`VAL_`) + signal codec (Intel/Motorola, signed, factor/offset) |
-| `openhil-models` | vehicle YAML config, config-driven ECUs, reference EV vECUs (charger/VCU/motor) |
+| `openhil-models` | vehicle YAML config, config-driven ECUs, reference EV vECUs (charger/VCU/motor) used by the bundled example |
 | `openhil-can` | async SocketCAN backend (feature `socketcan`) |
 | `openhil-test` | YAML test DSL, runner (virtual + hardware targets), HTML/JSON reports |
 | `openhil-cli` | the `openhil` binary: `init` / `simulate` / `test` / `report` |
 
-The simulation is fully deterministic: ECUs step in config order on an integer
-microsecond clock, so a PASS→FAIL flip is always caused by your change — never
-by the runner.
+## Concepts
+
+- **Bus from DBC** — any message map parses `BO_`/`SG_`/`VAL_` with Intel or
+  Motorola byte order, signed values, factor/offset scaling and symbolic value
+  tables. Assertions decode real signals, never raw bytes.
+- **Nodes** — ECUs are either config-driven (signal values in YAML, no code)
+  or custom Rust ECUs implementing the `Ecu` trait.
+- **One suite, two targets** — the same YAML tests run against the virtual
+  simulation or a live SocketCAN bus. `set_signal` and `fault` need the virtual
+  router and are rejected with a clear error on real hardware rather than
+  silently ignored.
+- **Determinism** — the simulation steps on an integer-microsecond clock with
+  ECUs in config order, so a PASS→FAIL flip is always caused by your change —
+  never by the runner.
 
 ## CLI
 
 ```sh
-# Scaffold a new vehicle project (vehicle.yaml, powertrain.dbc, tests/)
+# Scaffold a new project from the bundled EV powertrain templates (vehicle.yaml, powertrain.dbc, tests/)
 openhil init my-project
 
 # Run the virtual simulation and print the bus trace
@@ -65,8 +78,13 @@ bus) and are rejected with a clear error rather than silently ignored. The
 `virtual` or `vcan0`); the concrete device is the `interface:` field on the
 `socketcan` entry.
 
-See `examples/ev-powertrain/README.md` for the student walkthrough and a bill
-of materials (~€0 software, ~€15–30 with one real STM32 ECU).
+### Example: EV powertrain
+
+`examples/ev-powertrain/` is an included demo you can build on: a virtual EV
+powertrain (charger, VCU, motor) on a DBC-defined bus, with YAML test suites
+and a step-by-step walkthrough. See `examples/ev-powertrain/README.md` for the
+student walkthrough and a bill of materials (~€0 software, ~€15–30 with one
+real STM32 ECU).
 
 ## Development
 
