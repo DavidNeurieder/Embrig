@@ -3,7 +3,7 @@
 #   make check     fmt + clippy (all features, warnings denied)
 #   make test      workspace unit/integration tests (both feature sets)
 #   make examples  run the SIL and UDP examples (no hardware needed)
-#   make sil       run both SIL examples
+#   make sil       run all SIL examples (DBC firmware, robot, CANopen)
 #   make hil       bring up vcan0 and run the HIL example + CLI loopback (root)
 #   make vcan-up   create and bring up vcan0 (root)
 #   make vcan-down tear down vcan0 (root)
@@ -27,6 +27,7 @@ examples: sil
 sil:
 	$(CARGO) run -q --example sil_firmware --package embrig-sil
 	$(CARGO) run -q --example robot_sil --package embrig-sil
+	$(CARGO) run -q --example sil_canopen --package embrig-sil
 
 hil: vcan-up
 	$(CARGO) run -q --example can_hil --package embrig-test --features socketcan

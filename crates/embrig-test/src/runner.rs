@@ -410,10 +410,9 @@ async fn evaluate_expect<T: TestTarget + ?Sized>(
                         None => return Ok(None),
                         Some(_) if signal_name.is_empty() => None,
                         Some(f) => {
-                            let message = t
-                                .network()
-                                .message(id)
-                                .ok_or_else(|| format!("no message with id 0x{id:03X} in DBC"))?;
+                            let message = t.codec().message_by_id(id).ok_or_else(|| {
+                                format!("no message with id 0x{id:03X} in the signal codec")
+                            })?;
                             let signals = message
                                 .decode_signals(&f.data)
                                 .map_err(|e| format!("cannot decode 0x{id:03X}: {e}"))?;
@@ -517,6 +516,7 @@ async fn evaluate_udp_expect<T: TestTarget + ?Sized>(
 mod tests {
     use super::*;
     use crate::target::{BoxFut, CanLink, NetmapLink, TargetError, POLL_US};
+    use embrig_core::codec::SignalCodec;
     use embrig_core::frame::CanFrame;
     use embrig_dbc::Network;
     use std::collections::BTreeMap;
@@ -600,7 +600,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
 
     /// Decode `frame` into an [`Observed`] exactly like `evaluate_expect` does.
     fn can_observed(
-        network: &Network,
+        codec: &dyn SignalCodec,
         id: u32,
         signal: &str,
         frame: Option<&CanFrame>,
@@ -609,9 +609,9 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
             Some(f) => f,
             None => return Ok(None),
         };
-        let message = network
-            .message(id)
-            .ok_or_else(|| format!("no message with id 0x{id:03X} in DBC"))?;
+        let message = codec
+            .message_by_id(id)
+            .ok_or_else(|| format!("no message with id 0x{id:03X} in the signal codec"))?;
         let signals = message
             .decode_signals(&frame.data)
             .map_err(|e| format!("cannot decode 0x{id:03X}: {e}"))?;
@@ -780,7 +780,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
     }
 
     impl CanLink for MockTarget {
-        fn network(&self) -> &Network {
+        fn codec(&self) -> &dyn SignalCodec {
             &self.network
         }
 
@@ -1127,6 +1127,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
     /// returns the most recent datagram for `dst`.
     struct MockUdpTarget {
         time: Timestamp,
+        network: Network,
         netmap: Netmap,
         visible: Vec<UdpDatagram>,
         later: Vec<(Timestamp, UdpDatagram)>,
@@ -1136,6 +1137,7 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
         fn new() -> Self {
             Self {
                 time: 0,
+                network: Network::default(),
                 netmap: udp_netmap(),
                 visible: Vec::new(),
                 later: Vec::new(),
@@ -1161,8 +1163,8 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
     }
 
     impl CanLink for MockUdpTarget {
-        fn network(&self) -> &Network {
-            unimplemented!("no DBC network for a UDP-only mock")
+        fn codec(&self) -> &dyn SignalCodec {
+            &self.network
         }
     }
 

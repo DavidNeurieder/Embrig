@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use embrig_core::codec::SignalCodec;
 use embrig_core::network::{NetEcuFactory, NetRegistry};
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
@@ -191,7 +192,7 @@ impl UdpTarget {
 }
 
 impl CanLink for UdpTarget {
-    fn network(&self) -> &Network {
+    fn codec(&self) -> &dyn SignalCodec {
         &self.network
     }
 }
@@ -350,7 +351,7 @@ impl UdpSutTarget {
 }
 
 impl CanLink for UdpSutTarget {
-    fn network(&self) -> &Network {
+    fn codec(&self) -> &dyn SignalCodec {
         &self.network
     }
 }
@@ -475,7 +476,7 @@ impl UdpHardwareTarget {
 }
 
 impl CanLink for UdpHardwareTarget {
-    fn network(&self) -> &Network {
+    fn codec(&self) -> &dyn SignalCodec {
         &self.network
     }
 }

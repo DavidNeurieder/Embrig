@@ -19,6 +19,7 @@ pub use ecus::{
 use std::fs;
 use std::path::Path;
 
+use embrig_core::codec::SignalCodec;
 use embrig_core::frame::CanFrame;
 use embrig_core::simulation::Simulation;
 use embrig_core::{NetEcu, NetEcuError, NetEcuFactory};
@@ -124,151 +125,150 @@ pub fn build_simulation_indexed_with(
         source,
     })?;
     let network = embrig_dbc::parse(&text).map_err(ModelError::ParseDbc)?;
+    build_simulation_indexed_with_codec(config, &network, factories)
+}
 
+/// Like [`build_simulation_indexed_with`] but message lookups go through a
+/// [`SignalCodec`] instead of a DBC file, so the same config shape can drive
+/// any protocol (DBC today, CANopen for the SIL demo).
+pub fn build_simulation_indexed_with_codec(
+    config: &VehicleConfig,
+    codec: &dyn SignalCodec,
+    factories: impl NetEcuFactory<CanFrame>,
+) -> Result<BuiltSimulation, ModelError> {
     let mut sim = Simulation::new(config.step_us);
     let mut ecus: Vec<(String, usize)> = Vec::new();
 
     for ecu_cfg in &config.ecus {
-        let index = match ecu_cfg.kind {
-            EcuKind::Config => {
-                let msg_name = ecu_cfg
-                    .message
-                    .as_ref()
-                    .ok_or_else(|| ModelError::MissingMessage(ecu_cfg.name.clone()))?;
-                let message = network
-                    .messages
-                    .values()
-                    .find(|m| &m.name == msg_name)
-                    .ok_or_else(|| ModelError::UnknownMessageName {
-                        name: msg_name.clone(),
-                    })?
-                    .clone();
-                let ecu = ConfigEcu::new(
-                    ecu_cfg.name.clone(),
-                    message,
-                    ecu_cfg.period_us,
-                    &ecu_cfg.signals,
-                )
-                .map_err(|message| ModelError::Ecu {
-                    ecu: ecu_cfg.name.clone(),
-                    message,
-                })?;
-                sim.attach(Box::new(ecu), &ecu_cfg.listen)
-            }
-            EcuKind::Charger => {
-                let req = network
-                    .message(ecus::ID_CHARGE_REQUEST)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_CHARGE_REQUEST,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let battery = network
-                    .message(ecus::ID_BATTERY)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_BATTERY,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let status = network
-                    .message(ecus::ID_CHARGE_STATUS)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_CHARGE_STATUS,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let ecu = Charger::new(
-                    ecu_cfg.name.clone(),
-                    req,
-                    battery,
-                    status,
-                    ecu_cfg.period_us,
-                );
-                sim.attach(Box::new(ecu), &[ecus::ID_CHARGE_REQUEST, ecus::ID_BATTERY])
-            }
-            EcuKind::Vcu => {
-                let battery = network
-                    .message(ecus::ID_BATTERY)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_BATTERY,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let brake = network
-                    .message(ecus::ID_BRAKE)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_BRAKE,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let driver = network
-                    .message(ecus::ID_DRIVER)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_DRIVER,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let charger = network
-                    .message(ecus::ID_CHARGE_STATUS)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_CHARGE_STATUS,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let enable = network
-                    .message(ecus::ID_MOTOR_ENABLE)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_MOTOR_ENABLE,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let ecu = VehicleController::new(
-                    ecu_cfg.name.clone(),
-                    battery,
-                    brake,
-                    driver,
-                    charger,
-                    enable,
-                    ecu_cfg.period_us,
-                );
-                sim.attach(
-                    Box::new(ecu),
-                    &[
-                        ecus::ID_BATTERY,
-                        ecus::ID_BRAKE,
-                        ecus::ID_DRIVER,
-                        ecus::ID_CHARGE_STATUS,
-                    ],
-                )
-            }
-            EcuKind::Motor => {
-                let enable = network
-                    .message(ecus::ID_MOTOR_ENABLE)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_MOTOR_ENABLE,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let status = network
-                    .message(ecus::ID_MOTOR_STATUS)
-                    .ok_or(ModelError::MissingId {
-                        id: ecus::ID_MOTOR_STATUS,
-                        ecu: ecu_cfg.name.clone(),
-                    })?
-                    .clone();
-                let ecu = Motor::new(ecu_cfg.name.clone(), enable, status, ecu_cfg.period_us);
-                sim.attach(Box::new(ecu), &[ecus::ID_MOTOR_ENABLE])
-            }
-            EcuKind::Sil => {
-                let ecu = factories
-                    .create(&ecu_cfg.name, ecu_cfg.step_budget_us)
+        let index =
+            match ecu_cfg.kind {
+                EcuKind::Config => {
+                    let msg_name = ecu_cfg
+                        .message
+                        .as_ref()
+                        .ok_or_else(|| ModelError::MissingMessage(ecu_cfg.name.clone()))?;
+                    let message = codec.owned_message_by_name(msg_name).ok_or_else(|| {
+                        ModelError::UnknownMessageName {
+                            name: msg_name.clone(),
+                        }
+                    })?;
+                    let ecu = ConfigEcu::new(
+                        ecu_cfg.name.clone(),
+                        message,
+                        ecu_cfg.period_us,
+                        &ecu_cfg.signals,
+                    )
                     .map_err(|message| ModelError::Ecu {
                         ecu: ecu_cfg.name.clone(),
                         message,
                     })?;
-                sim.attach(ecu, &ecu_cfg.listen)
-            }
-        };
+                    sim.attach(Box::new(ecu), &ecu_cfg.listen)
+                }
+                EcuKind::Charger => {
+                    let req = codec.owned_message_by_id(ecus::ID_CHARGE_REQUEST).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_CHARGE_REQUEST,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let battery = codec.owned_message_by_id(ecus::ID_BATTERY).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_BATTERY,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let status = codec.owned_message_by_id(ecus::ID_CHARGE_STATUS).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_CHARGE_STATUS,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let ecu = Charger::new(
+                        ecu_cfg.name.clone(),
+                        req,
+                        battery,
+                        status,
+                        ecu_cfg.period_us,
+                    );
+                    sim.attach(Box::new(ecu), &[ecus::ID_CHARGE_REQUEST, ecus::ID_BATTERY])
+                }
+                EcuKind::Vcu => {
+                    let battery = codec.owned_message_by_id(ecus::ID_BATTERY).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_BATTERY,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let brake =
+                        codec
+                            .owned_message_by_id(ecus::ID_BRAKE)
+                            .ok_or(ModelError::MissingId {
+                                id: ecus::ID_BRAKE,
+                                ecu: ecu_cfg.name.clone(),
+                            })?;
+                    let driver = codec.owned_message_by_id(ecus::ID_DRIVER).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_DRIVER,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let charger = codec.owned_message_by_id(ecus::ID_CHARGE_STATUS).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_CHARGE_STATUS,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let enable = codec.owned_message_by_id(ecus::ID_MOTOR_ENABLE).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_MOTOR_ENABLE,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let ecu = VehicleController::new(
+                        ecu_cfg.name.clone(),
+                        battery,
+                        brake,
+                        driver,
+                        charger,
+                        enable,
+                        ecu_cfg.period_us,
+                    );
+                    sim.attach(
+                        Box::new(ecu),
+                        &[
+                            ecus::ID_BATTERY,
+                            ecus::ID_BRAKE,
+                            ecus::ID_DRIVER,
+                            ecus::ID_CHARGE_STATUS,
+                        ],
+                    )
+                }
+                EcuKind::Motor => {
+                    let enable = codec.owned_message_by_id(ecus::ID_MOTOR_ENABLE).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_MOTOR_ENABLE,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let status = codec.owned_message_by_id(ecus::ID_MOTOR_STATUS).ok_or(
+                        ModelError::MissingId {
+                            id: ecus::ID_MOTOR_STATUS,
+                            ecu: ecu_cfg.name.clone(),
+                        },
+                    )?;
+                    let ecu = Motor::new(ecu_cfg.name.clone(), enable, status, ecu_cfg.period_us);
+                    sim.attach(Box::new(ecu), &[ecus::ID_MOTOR_ENABLE])
+                }
+                EcuKind::Sil => {
+                    let ecu = factories
+                        .create(&ecu_cfg.name, ecu_cfg.step_budget_us)
+                        .map_err(|message| ModelError::Ecu {
+                            ecu: ecu_cfg.name.clone(),
+                            message,
+                        })?;
+                    sim.attach(ecu, &ecu_cfg.listen)
+                }
+            };
         ecus.push((ecu_cfg.name.clone(), index));
     }
 

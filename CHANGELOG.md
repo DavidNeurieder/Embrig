@@ -15,13 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifacts.
 - **SIL firmware split into its own crates** — the embedded code of the SIL
   demos moved out of the example files into dedicated workspace crates
-  (`firmware/controller` → `fw-controller`, `firmware/robot` → `fw-robot`),
-  so it compiles separately from the test harness
-  (`cargo build -p fw-controller`). The `sil_firmware` / `robot_sil` examples
-  are now thin harnesses that register the firmware by name.
+  (`firmware/controller` → `fw-controller`, `firmware/robot` → `fw-robot`,
+  `firmware/canopen-controller` → `fw-canopen-controller`), so it compiles
+  separately from the test harness (`cargo build -p fw-controller`). The
+  `sil_firmware` / `robot_sil` / `sil_canopen` examples are now thin harnesses
+  that register the firmware by name.
+- **Protocol-neutral signal codec seam** — `embrig-core::codec` introduces
+  `MessageCodec` (id / encode / decode / symbols) and `SignalCodec` (resolve
+  messages by id or name); DBC implements both, so `ConfigEcu`, the reference
+  vECUs and the SIL target resolve messages through the trait instead of a DBC
+  file. `CanLink::codec()` replaces `TestTarget::network()`; targets return
+  their DBC `Network` and the SIL target now accepts any boxed `SignalCodec`
+  (`SilTarget::new_codec`, `sil_run_codec`).
+- `SignalSpec` in `embrig-canopen` defaults an omitted `factor` to `1.0` (was
+  `0.0` via the plain `#[serde(default)]`).
 
 ### Added
 
+- **`embrig-canopen`** — a minimal hand-rolled CANopen (CiA 301) subset behind
+  the codec seam, with **no third-party protocol crate**:
+  - COB-ID helpers (`tpdo1`/`rpdo1`/`heartbeat`/`nmt`), NMT command codes and
+    heartbeat state bytes.
+  - `EcuSpec` / `SignalSpec` (an `eds.yaml` node description) and `CanOpenCodec`
+    implementing `SignalCodec`; PDO payloads reuse the DBC bit-packer (Intel
+    LE, factor/offset), heartbeat and NMT are small bespoke codecs.
+- **CANopen SIL demo** — `examples/sil_canopen.rs` runs host-compiled CANopen
+  firmware (`firmware/canopen-controller`) on the virtual bus with the exact
+  same `vehicle.yaml` + YAML suite DSL as DBC. `canopen/eds.yaml` replaces the
+  DBC; `master_nmt` + `master_rpdo` config nodes drive NMT START and the RPDO1
+  temperature; suites assert on TPDO1 `valve_open` and the heartbeat. Passes
+  `2/2`.
 - **Software-in-the-loop (SIL)** — run host-compiled firmware against the
   virtual bus with the same YAML suites as virtual/hardware targets:
   - **`embrig-sil`** — `SilRegistry` (firmware factories keyed by ECU name,

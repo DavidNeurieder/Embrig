@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use embrig_core::codec::SignalCodec;
 use embrig_core::ecu::EcuError;
 use embrig_core::fault::{Fault, FaultRule};
 use embrig_core::frame::CanFrame;
@@ -54,14 +55,15 @@ pub enum TargetError {
     Build(String),
 }
 
-/// The CAN link a target exposes: the DBC network plus the bus operations.
+/// The CAN link a target exposes: the signal codec plus the bus operations.
 ///
 /// Methods default to a clear `UnsupportedOnTarget` error so a target that
 /// only talks a message-map network (see [`NetmapLink`]) implements just
-/// [`CanLink::network`].
+/// [`CanLink::codec`].
 pub trait CanLink {
-    /// The DBC network used to decode asserted signals.
-    fn network(&self) -> &Network;
+    /// The signal codec used to decode asserted signals (DBC today; a minimal
+    /// CANopen subset for the SIL demo).
+    fn codec(&self) -> &dyn SignalCodec;
     /// Override a signal of an ECU for its next transmission.
     fn set_signal(
         &mut self,
@@ -246,7 +248,7 @@ impl VirtualTarget {
 }
 
 impl CanLink for VirtualTarget {
-    fn network(&self) -> &Network {
+    fn codec(&self) -> &dyn SignalCodec {
         &self.network
     }
 
@@ -336,7 +338,7 @@ impl HardwareTarget {
 
 #[cfg(feature = "socketcan")]
 impl CanLink for HardwareTarget {
-    fn network(&self) -> &Network {
+    fn codec(&self) -> &dyn SignalCodec {
         &self.network
     }
 
@@ -425,8 +427,8 @@ mod tests {
         target.wait(100_000).await.unwrap();
         let frame = target.poll(0x100).await.unwrap().unwrap();
         let value = target
-            .network()
-            .message(0x100)
+            .codec()
+            .message_by_id(0x100)
             .unwrap()
             .decode_signal(&frame.data, "voltage")
             .unwrap();
@@ -505,10 +507,10 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
             .unwrap();
         target.wait(100_000).await.unwrap();
         let frame = target.poll(0x100).await.unwrap().expect("battery frame");
-        let network = target.network();
+        let codec = target.codec();
         assert!(
-            (network
-                .message(0x100)
+            (codec
+                .message_by_id(0x100)
                 .unwrap()
                 .decode_signal(&frame.data, "voltage")
                 .unwrap()

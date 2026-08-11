@@ -1,0 +1,37 @@
+# CANopen software-in-the-loop vehicle: the `controller` ECU is host-compiled
+# CANopen firmware (`type: sil`), bound in code through the SIL registry. No
+# DBC file: the message map comes from `eds.yaml` (the `CanOpenCodec`).
+name: canopen-controller
+step_us: 1000
+
+ecus:
+  # CANopen master nodes (config ECUs speak the same codec):
+  # `master_nmt` sends NMT START (0x000, node 1) so the firmware leaves
+  # PRE_OPERATIONAL; `master_rpdo` sends the process temperature on RPDO1.
+  - name: master_rpdo
+    type: config
+    message: RPDO1
+    period_us: 100000
+    signals:
+      temperature: 45.0
+
+  - name: master_nmt
+    type: config
+    message: NMT
+    period_us: 100000
+    signals:
+      node: 1.0
+      command: 1.0
+
+  # The ECU under test: firmware compiled for the host.
+  - name: controller
+    type: sil
+    period_us: 50000
+    listen: [0x201, 0x000]
+    step_budget_us: 100000
+
+interfaces:
+  - name: virtual
+    type: virtual
+  - name: sil
+    type: sil

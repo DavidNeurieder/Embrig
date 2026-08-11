@@ -16,8 +16,10 @@ thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 serde-saphyr = { workspace = true }
+embrig-canopen = { workspace = true }
 fw-controller = { workspace = true }
 fw-robot = { workspace = true }
+fw-canopen-controller = { workspace = true }
 
 [features]
 default = []

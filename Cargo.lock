@@ -183,6 +183,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "embrig-canopen"
+version = "0.1.0"
+dependencies = [
+ "embrig-core",
+ "embrig-dbc",
+ "serde",
+ "serde-saphyr",
+ "thiserror",
+]
+
+[[package]]
 name = "embrig-cli"
 version = "0.1.0"
 dependencies = [
@@ -205,6 +216,7 @@ version = "0.1.0"
 name = "embrig-dbc"
 version = "0.1.0"
 dependencies = [
+ "embrig-core",
  "thiserror",
 ]
 
@@ -233,10 +245,12 @@ name = "embrig-sil"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "embrig-canopen",
  "embrig-core",
  "embrig-dbc",
  "embrig-models",
  "embrig-test",
+ "fw-canopen-controller",
  "fw-controller",
  "fw-robot",
  "serde-saphyr",
@@ -364,6 +378,14 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fw-canopen-controller"
+version = "0.1.0"
+dependencies = [
+ "embrig-canopen",
+ "embrig-core",
 ]
 
 [[package]]

@@ -1,0 +1,13 @@
+[package]
+name = "embrig-canopen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Minimal hand-rolled CANopen (CiA 301) subset behind the embrig codec seam"
+
+[dependencies]
+embrig-core = { workspace = true }
+embrig-dbc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde-saphyr = { workspace = true }
+thiserror = { workspace = true }

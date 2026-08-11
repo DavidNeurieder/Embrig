@@ -1,0 +1,18 @@
+# Minimal CANopen (CiA 301) node description — the EDS analogue of a DBC file.
+# Node id 1 speaks a small protocol subset: TPDO1/RPDO1 PDOs (packed like DBC
+# signals), a heartbeat producer and NMT. Loaded by both the firmware under
+# test and the SIL harness, so they always agree on the message map.
+node_id: 1
+heartbeat_period_us: 100000
+tpdo1:
+  - name: valve_open
+    bit: 0
+    length: 1
+    factor: 1.0
+    offset: 0.0
+rpdo1:
+  - name: temperature
+    bit: 0
+    length: 16
+    factor: 0.1
+    offset: 0.0

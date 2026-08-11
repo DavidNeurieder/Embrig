@@ -10,6 +10,7 @@
 //! timestamps are integers, and there is no wall-clock dependence anywhere in
 //! this crate.
 
+pub mod codec;
 pub mod ecu;
 pub mod fault;
 pub mod frame;
@@ -19,6 +20,7 @@ pub mod signal;
 pub mod simulation;
 pub mod time;
 
+pub use codec::{DecodedSignal, MessageCodec, SignalCodec};
 pub use ecu::EcuError;
 pub use fault::{Fault, FaultRule};
 pub use frame::{CanFrame, FrameError};

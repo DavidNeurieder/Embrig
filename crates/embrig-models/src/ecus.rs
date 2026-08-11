@@ -15,10 +15,10 @@
 //! The VCU is the ECU under test: its `motor_enable` output encodes the
 //! safety decision derived from its inputs.
 
+use embrig_core::codec::MessageCodec;
 use embrig_core::frame::CanFrame;
 use embrig_core::time::{ms, Timestamp};
 use embrig_core::{EcuError, NetEcu};
-use embrig_dbc::MessageDef;
 
 /// Message ids from the powertrain DBC.
 pub const ID_BATTERY: u32 = 0x100;
@@ -40,7 +40,7 @@ pub const MOTOR_RUNNING: &str = "RUNNING";
 pub const MOTOR_SAFE: &str = "SAFE";
 
 /// Resolution of a value-table symbol to a physical value for `name`.
-fn symbol_physical(message: &MessageDef, name: &str, symbol: &str) -> Option<f64> {
+fn symbol_physical(message: &dyn MessageCodec, name: &str, symbol: &str) -> Option<f64> {
     message.physical_for_symbol(name, symbol)
 }
 
@@ -48,9 +48,9 @@ fn symbol_physical(message: &MessageDef, name: &str, symbol: &str) -> Option<f64
 /// `FAULT` when the battery message is stale for more than 500 ms.
 pub struct Charger {
     name: String,
-    request: MessageDef,
-    battery: MessageDef,
-    status: MessageDef,
+    request: Box<dyn MessageCodec>,
+    battery: Box<dyn MessageCodec>,
+    status: Box<dyn MessageCodec>,
     period: Timestamp,
     next: Timestamp,
     state: &'static str,
@@ -62,9 +62,9 @@ pub struct Charger {
 impl Charger {
     pub fn new(
         name: impl Into<String>,
-        request: MessageDef,
-        battery: MessageDef,
-        status: MessageDef,
+        request: Box<dyn MessageCodec>,
+        battery: Box<dyn MessageCodec>,
+        status: Box<dyn MessageCodec>,
         period: Timestamp,
     ) -> Self {
         Self {
@@ -95,12 +95,12 @@ impl NetEcu<CanFrame> for Charger {
     }
 
     fn on_message(&mut self, frame: &CanFrame, time: Timestamp) {
-        if frame.id == self.request.id {
+        if frame.id == self.request.id() {
             if let Ok(v) = self.request.decode_signal(&frame.data, "charge_request") {
                 self.charge_request = v > 0.5;
             }
         }
-        if frame.id == self.battery.id {
+        if frame.id == self.battery.id() {
             self.last_battery = Some(time);
             if let Ok(soc) = self.battery.decode_signal(&frame.data, "soc") {
                 self.last_soc = Some(soc);
@@ -124,9 +124,9 @@ impl NetEcu<CanFrame> for Charger {
         if time < self.next {
             return;
         }
-        if let Some(value) = symbol_physical(&self.status, "state", self.state) {
+        if let Some(value) = symbol_physical(&*self.status, "state", self.state) {
             if let Ok(data) = self.status.encode_signals(&[("state", value)]) {
-                if let Ok(frame) = CanFrame::new(self.status.id, data) {
+                if let Ok(frame) = CanFrame::new(self.status.id(), data) {
                     out.push(frame);
                 }
             }
@@ -144,11 +144,11 @@ impl NetEcu<CanFrame> for Charger {
 /// - a battery message has been seen within the last 300 ms.
 pub struct VehicleController {
     name: String,
-    battery: MessageDef,
-    brake: MessageDef,
-    driver: MessageDef,
-    charger: MessageDef,
-    enable: MessageDef,
+    battery: Box<dyn MessageCodec>,
+    brake: Box<dyn MessageCodec>,
+    driver: Box<dyn MessageCodec>,
+    charger: Box<dyn MessageCodec>,
+    enable: Box<dyn MessageCodec>,
     period: Timestamp,
     next: Timestamp,
     battery_state: Option<&'static str>,
@@ -163,11 +163,11 @@ impl VehicleController {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
-        battery: MessageDef,
-        brake: MessageDef,
-        driver: MessageDef,
-        charger: MessageDef,
-        enable: MessageDef,
+        battery: Box<dyn MessageCodec>,
+        brake: Box<dyn MessageCodec>,
+        driver: Box<dyn MessageCodec>,
+        charger: Box<dyn MessageCodec>,
+        enable: Box<dyn MessageCodec>,
         period: Timestamp,
     ) -> Self {
         Self {
@@ -206,7 +206,7 @@ impl NetEcu<CanFrame> for VehicleController {
     }
 
     fn on_message(&mut self, frame: &CanFrame, time: Timestamp) {
-        if frame.id == self.battery.id {
+        if frame.id == self.battery.id() {
             self.last_battery = Some(time);
             if let Ok(v) = self.battery.decode_signal(&frame.data, "voltage") {
                 self.battery_voltage = Some(v);
@@ -225,15 +225,15 @@ impl NetEcu<CanFrame> for VehicleController {
                             _ => None,
                         });
             }
-        } else if frame.id == self.brake.id {
+        } else if frame.id == self.brake.id() {
             if let Ok(v) = self.brake.decode_signal(&frame.data, "brake_pressed") {
                 self.brake_pressed = Some(v > 0.5);
             }
-        } else if frame.id == self.driver.id {
+        } else if frame.id == self.driver.id() {
             if let Ok(v) = self.driver.decode_signal(&frame.data, "drive_enabled") {
                 self.drive_enabled = Some(v > 0.5);
             }
-        } else if frame.id == self.charger.id {
+        } else if frame.id == self.charger.id() {
             if let Ok(v) = self.charger.decode_signal(&frame.data, "state") {
                 let raw = v.round() as i64;
                 self.charger_state =
@@ -263,7 +263,7 @@ impl NetEcu<CanFrame> for VehicleController {
             .enable
             .encode_signals(&[("motor_enable", if enable { 1.0 } else { 0.0 })])
         {
-            if let Ok(frame) = CanFrame::new(self.enable.id, data) {
+            if let Ok(frame) = CanFrame::new(self.enable.id(), data) {
                 out.push(frame);
             }
         }
@@ -283,8 +283,8 @@ impl NetEcu<CanFrame> for VehicleController {
 /// The motor: `RUNNING` when enabled, otherwise `SAFE`.
 pub struct Motor {
     name: String,
-    enable: MessageDef,
-    status: MessageDef,
+    enable: Box<dyn MessageCodec>,
+    status: Box<dyn MessageCodec>,
     period: Timestamp,
     next: Timestamp,
     enabled: bool,
@@ -293,8 +293,8 @@ pub struct Motor {
 impl Motor {
     pub fn new(
         name: impl Into<String>,
-        enable: MessageDef,
-        status: MessageDef,
+        enable: Box<dyn MessageCodec>,
+        status: Box<dyn MessageCodec>,
         period: Timestamp,
     ) -> Self {
         Self {
@@ -314,7 +314,7 @@ impl NetEcu<CanFrame> for Motor {
     }
 
     fn on_message(&mut self, frame: &CanFrame, _time: Timestamp) {
-        if frame.id == self.enable.id {
+        if frame.id == self.enable.id() {
             if let Ok(v) = self.enable.decode_signal(&frame.data, "motor_enable") {
                 self.enabled = v > 0.5;
             }
@@ -331,12 +331,12 @@ impl NetEcu<CanFrame> for Motor {
             MOTOR_SAFE
         };
         let rpm = if self.enabled { 3000.0 } else { 0.0 };
-        if let Some(state_v) = symbol_physical(&self.status, "state", state) {
+        if let Some(state_v) = symbol_physical(&*self.status, "state", state) {
             if let Ok(data) = self
                 .status
                 .encode_signals(&[("state", state_v), ("rpm", rpm)])
             {
-                if let Ok(frame) = CanFrame::new(self.status.id, data) {
+                if let Ok(frame) = CanFrame::new(self.status.id(), data) {
                     out.push(frame);
                 }
             }
@@ -411,7 +411,7 @@ mod tests {
 
         let battery = ConfigEcu::new(
             "battery",
-            msg(ID_BATTERY),
+            Box::new(msg(ID_BATTERY)),
             ms(100),
             &sigs(&[
                 ("voltage", SignalLiteral::Num(400.0)),
@@ -424,14 +424,14 @@ mod tests {
         .unwrap();
         let brake = ConfigEcu::new(
             "brake",
-            msg(ID_BRAKE),
+            Box::new(msg(ID_BRAKE)),
             ms(100),
             &sigs(&[("brake_pressed", SignalLiteral::Bool(false))]),
         )
         .unwrap();
         let driver = ConfigEcu::new(
             "driver",
-            msg(ID_DRIVER),
+            Box::new(msg(ID_DRIVER)),
             ms(100),
             &sigs(&[("drive_enabled", SignalLiteral::Bool(true))]),
         )
@@ -439,21 +439,26 @@ mod tests {
 
         let charger = Charger::new(
             "charger",
-            msg(ID_CHARGE_REQUEST),
-            msg(ID_BATTERY),
-            msg(ID_CHARGE_STATUS),
+            Box::new(msg(ID_CHARGE_REQUEST)),
+            Box::new(msg(ID_BATTERY)),
+            Box::new(msg(ID_CHARGE_STATUS)),
             ms(100),
         );
         let vcu = VehicleController::new(
             "vcu",
-            msg(ID_BATTERY),
-            msg(ID_BRAKE),
-            msg(ID_DRIVER),
-            msg(ID_CHARGE_STATUS),
-            msg(ID_MOTOR_ENABLE),
+            Box::new(msg(ID_BATTERY)),
+            Box::new(msg(ID_BRAKE)),
+            Box::new(msg(ID_DRIVER)),
+            Box::new(msg(ID_CHARGE_STATUS)),
+            Box::new(msg(ID_MOTOR_ENABLE)),
             ms(50),
         );
-        let motor = Motor::new("motor", msg(ID_MOTOR_ENABLE), msg(ID_MOTOR_STATUS), ms(50));
+        let motor = Motor::new(
+            "motor",
+            Box::new(msg(ID_MOTOR_ENABLE)),
+            Box::new(msg(ID_MOTOR_STATUS)),
+            ms(50),
+        );
 
         let battery_i = sim.attach(Box::new(battery), &[]);
         let brake_i = sim.attach(Box::new(brake), &[]);

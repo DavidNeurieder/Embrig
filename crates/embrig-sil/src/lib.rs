@@ -43,14 +43,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use embrig_core::codec::SignalCodec;
 use embrig_core::fault::{Fault, FaultRule};
 use embrig_core::frame::CanFrame;
 use embrig_core::network::NetRegistry;
 use embrig_core::signal::SignalValue;
 use embrig_core::simulation::Simulation;
 use embrig_core::time::Timestamp;
-use embrig_dbc::Network;
-use embrig_models::{build_simulation_indexed_with, ModelError, VehicleConfig};
+use embrig_models::{build_simulation_indexed_with_codec, ModelError, VehicleConfig};
 use embrig_test::target::{BoxFut, CanLink, NetmapLink, POLL_US};
 use embrig_test::{run_suite, SuiteResult, TargetError, TestError, TestTarget};
 use thiserror::Error;
@@ -85,15 +85,14 @@ pub struct SilTarget {
     sim: Simulation,
     ecus: HashMap<String, usize>,
     sut: HashSet<String>,
-    network: Network,
+    codec: Box<dyn SignalCodec>,
     config: VehicleConfig,
-    dbc: PathBuf,
     registry: SilRegistry,
 }
 
 impl SilTarget {
-    /// Build a SIL target. `registry` is owned so `reset` can re-invoke the
-    /// firmware factories for a fresh simulation.
+    /// Build a SIL target from a DBC file. `registry` is owned so `reset` can
+    /// re-invoke the firmware factories for a fresh simulation.
     pub fn new(
         config: &VehicleConfig,
         dbc_path: &Path,
@@ -104,7 +103,17 @@ impl SilTarget {
         })?;
         let network =
             embrig_dbc::parse(&text).map_err(|e| TargetError::Can(format!("invalid DBC: {e}")))?;
-        let built = build_simulation_indexed_with(config, dbc_path, &registry)
+        Self::new_codec(config, Box::new(network), registry)
+    }
+
+    /// Build a SIL target against any [`SignalCodec`] (DBC today, CANopen for
+    /// the SIL demo) instead of a DBC file.
+    pub fn new_codec(
+        config: &VehicleConfig,
+        codec: Box<dyn SignalCodec>,
+        registry: SilRegistry,
+    ) -> Result<Self, TargetError> {
+        let built = build_simulation_indexed_with_codec(config, codec.as_ref(), &registry)
             .map_err(|e| TargetError::Can(e.to_string()))?;
         let sut = config
             .ecus
@@ -116,9 +125,8 @@ impl SilTarget {
             sim: built.sim,
             ecus: built.ecus.into_iter().collect(),
             sut,
-            network,
+            codec,
             config: config.clone(),
-            dbc: dbc_path.to_path_buf(),
             registry,
         })
     }
@@ -153,8 +161,8 @@ impl SilTarget {
 }
 
 impl CanLink for SilTarget {
-    fn network(&self) -> &Network {
-        &self.network
+    fn codec(&self) -> &dyn SignalCodec {
+        self.codec.as_ref()
     }
 
     fn set_signal(
@@ -214,8 +222,9 @@ impl TestTarget for SilTarget {
     }
 
     fn reset(&mut self) -> Result<(), TargetError> {
-        let built = build_simulation_indexed_with(&self.config, &self.dbc, &self.registry)
-            .map_err(|e| TargetError::Can(e.to_string()))?;
+        let built =
+            build_simulation_indexed_with_codec(&self.config, self.codec.as_ref(), &self.registry)
+                .map_err(|e| TargetError::Can(e.to_string()))?;
         self.sim = built.sim;
         self.ecus = built.ecus.into_iter().collect();
         Ok(())
@@ -244,6 +253,25 @@ pub fn sil_run(
         .build()?;
     runtime.block_on(async {
         let mut target = SilTarget::new(config, dbc_path, registry)?;
+        run_suite(&mut target, files, "sil")
+            .await
+            .map_err(SilError::from)
+    })
+}
+
+/// Like [`sil_run`] but drives the firmware through any [`SignalCodec`]
+/// (DBC today, CANopen for the SIL demo) instead of a DBC file.
+pub fn sil_run_codec(
+    config: &VehicleConfig,
+    codec: Box<dyn SignalCodec>,
+    registry: SilRegistry,
+    files: &[PathBuf],
+) -> Result<SuiteResult, SilError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let mut target = SilTarget::new_codec(config, codec, registry)?;
         run_suite(&mut target, files, "sil")
             .await
             .map_err(SilError::from)
@@ -473,8 +501,8 @@ interfaces:
         target.wait(100_000).await.unwrap();
         let frame = target.poll(0x100).await.unwrap().expect("sensor frame");
         let value = target
-            .network()
-            .message(0x100)
+            .codec()
+            .message_by_id(0x100)
             .unwrap()
             .decode_signal(&frame.data, "temperature")
             .unwrap();
@@ -525,5 +553,88 @@ interfaces:
             "got: {message}"
         );
         assert!(message.contains("registered"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn canopen_codec_runs_the_same_suites() {
+        use embrig_canopen::codec::CanOpenCodec;
+        use embrig_canopen::spec::EcuSpec;
+        use fw_canopen_controller::CanOpenControllerFirmware;
+
+        let eds = EcuSpec::parse(
+            r#"
+node_id: 1
+heartbeat_period_us: 100000
+tpdo1:
+  - name: valve_open
+    bit: 0
+    length: 1
+rpdo1:
+  - name: temperature
+    bit: 0
+    length: 16
+    factor: 0.1
+"#,
+        )
+        .unwrap();
+        let codec = CanOpenCodec::new(&eds).unwrap();
+
+        let vehicle = tmp_file(
+            "canopen-vehicle.yaml",
+            r#"
+name: canopen
+step_us: 1000
+ecus:
+  - name: master_rpdo
+    type: config
+    message: RPDO1
+    period_us: 100000
+    signals:
+      temperature: 45.0
+  - name: master_nmt
+    type: config
+    message: NMT
+    period_us: 100000
+    signals:
+      node: 1.0
+      command: 1.0
+  - name: controller
+    type: sil
+    period_us: 50000
+    listen: [0x201, 0x000]
+    step_budget_us: 100000
+"#,
+        );
+        let config: VehicleConfig =
+            serde_saphyr::from_str(&std::fs::read_to_string(&vehicle).unwrap()).unwrap();
+        let files = vec![
+            suite(
+                "valid_temperature_opens_valve.yaml",
+                "  - wait: { time: 300ms }\n  - expect: { id: 0x181, signal: valve_open, equals: true, within: 1s }\n",
+            ),
+            suite(
+                "overrange_temperature_closes_valve.yaml",
+                "  - wait: { time: 300ms }\n  - set_signal: { ecu: master_rpdo, id: 0x201, signal: temperature, value: 150.0 }\n  - expect: { id: 0x181, signal: valve_open, equals: false, within: 1s }\n",
+            ),
+        ];
+
+        let mut registry = SilRegistry::new();
+        registry.register(
+            "controller",
+            |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
+                Ok(Box::new(CanOpenControllerFirmware::new(name)))
+            },
+        );
+        let mut target = SilTarget::new_codec(&config, Box::new(codec), registry).unwrap();
+        let result = run_suite(&mut target, &files, "sil")
+            .await
+            .map_err(SilError::from)
+            .unwrap();
+        let failures: Vec<String> = result
+            .tests
+            .iter()
+            .flat_map(|t| t.failures.iter().cloned())
+            .collect();
+        assert_eq!(result.failed(), 0, "failures: {failures:?}");
     }
 }

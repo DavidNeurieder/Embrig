@@ -19,16 +19,17 @@ test to FAIL).
 
 ## What it does
 
-A Cargo workspace with eight crates:
+A Cargo workspace with nine crates:
 
 | Crate | Purpose |
 | --- | --- |
-| `embrig-core` | deterministic virtual CAN simulation: `CanFrame`, integer-µs clock, `Ecu` trait, routing, fault injection, event recorder |
+| `embrig-core` | deterministic virtual CAN simulation: `CanFrame`, integer-µs clock, `Ecu` trait, routing, fault injection, event recorder, the protocol-neutral `SignalCodec` seam |
 | `embrig-dbc` | DBC parser (`BO_`/`SG_`/`VAL_`) + signal codec (Intel/Motorola, signed, factor/offset) |
+| `embrig-canopen` | minimal CANopen (CiA 301) subset behind the codec seam: TPDO1/RPDO1, heartbeat, NMT — no third-party protocol stack |
 | `embrig-models` | vehicle YAML config, config-driven ECUs, reference EV vECUs (charger/VCU/motor) used by the bundled example |
 | `embrig-net` | deterministic virtual Ethernet (UDP) network: netmap codec, datagrams, `UdpEcu` trait, routing, fault injection |
 | `embrig-can` | async SocketCAN backend (feature `socketcan`) |
-| `embrig-sil` | software-in-the-loop: run host-compiled firmware against the virtual bus, wall-clock step budgets, `sil_run` helper |
+| `embrig-sil` | software-in-the-loop: run host-compiled firmware against the virtual bus, wall-clock step budgets, `sil_run`/`sil_run_codec` helpers |
 | `embrig-test` | YAML test DSL, runner (virtual + SIL + UDP + hardware targets), HTML/JSON reports |
 | `embrig-cli` | the `embrig` binary: `init` / `simulate` / `test` / `report` |
 
@@ -36,7 +37,9 @@ A Cargo workspace with eight crates:
 
 - **Bus from DBC** — any message map parses `BO_`/`SG_`/`VAL_` with Intel or
   Motorola byte order, signed values, factor/offset scaling and symbolic value
-  tables. Assertions decode real signals, never raw bytes.
+  tables. Assertions decode real signals, never raw bytes. DBC is the default
+  codec behind a protocol-neutral `SignalCodec` seam, so the same
+  `vehicle.yaml` + YAML suites can drive another protocol unchanged.
 - **Netmap for Ethernet** — a UDP network is described by a netmap instead of
   a DBC: messages keyed by destination endpoint, with named fields at byte
   offsets (`u8`, `bool`, little/big-endian integers, `f32le`/`f64le`, scaling
@@ -151,6 +154,22 @@ cargo run --example robot_sil --package embrig-sil
 → `4 passed, 0 failed`: joystick commands drive the wheels, the e-stop halts
 (and releasing it resumes), and commands above the 1.5 m/s limit are refused.
 
+A third example proves the message map does not have to be DBC: the same
+`vehicle.yaml` shape and YAML suites drive a **CANopen** node, so the codec
+seam works end to end. `embrig-canopen` is a hand-rolled minimal CiA 301
+subset (no third-party protocol crate); the firmware in
+`firmware/canopen-controller` boots PRE_OPERATIONAL, an NMT START (`0x000`)
+moves it to OPERATIONAL, it receives the temperature on RPDO1 (`0x201`) and
+reports the fail-safe valve command on TPDO1 (`0x181`) plus its heartbeat
+(`0x701`). The EDS (`canopen/eds.yaml`) replaces the DBC, and the harness
+builds the target with `sil_run_codec`:
+
+```sh
+cargo run --example sil_canopen --package embrig-sil
+```
+
+→ `2 passed, 0 failed`.
+
 ### Example: EV powertrain
 
 `examples/ev-powertrain/` is an included demo you can build on: a virtual EV
@@ -194,6 +213,7 @@ cargo clippy --workspace --all-targets --features socketcan -- -D warnings
 cargo test --workspace --features socketcan
 cargo run --example sil_firmware --package embrig-sil
 cargo run --example robot_sil --package embrig-sil
+cargo run --example sil_canopen --package embrig-sil
 cargo run --example udp_rover --package embrig-test
 ```
 

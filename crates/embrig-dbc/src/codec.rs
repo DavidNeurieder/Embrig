@@ -1,4 +1,5 @@
-use crate::types::{ByteOrder, MessageDef, Signal, SignalDef};
+use crate::types::{ByteOrder, MessageDef, Network, Signal, SignalDef};
+use embrig_core::codec::{DecodedSignal, MessageCodec, SignalCodec};
 use thiserror::Error;
 
 /// Error produced while encoding or decoding signals.
@@ -237,8 +238,71 @@ fn fits_bits(value: i64, length: u16, is_signed: bool) -> bool {
     }
 }
 
+/// The DBC [`MessageDef`] as a protocol-neutral [`MessageCodec`].
+///
+/// This is the adapter that lets the DBC bit-packer sit behind the codec seam:
+/// errors are stringified so implementations can stay dependency-free.
+impl MessageCodec for MessageDef {
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn encode_signals(&self, values: &[(&str, f64)]) -> Result<Vec<u8>, String> {
+        MessageDef::encode_signals(self, values).map_err(|e| e.to_string())
+    }
+
+    fn check_value(&self, name: &str, value: f64) -> Result<(), String> {
+        MessageDef::check_value(self, name, value).map_err(|e| e.to_string())
+    }
+
+    fn physical_for_symbol(&self, signal: &str, symbol: &str) -> Option<f64> {
+        MessageDef::physical_for_symbol(self, signal, symbol)
+    }
+
+    fn symbol_for(&self, signal: &str, raw: i64) -> Option<String> {
+        MessageDef::symbol_for(self, signal, raw)
+    }
+
+    fn decode_signals(&self, data: &[u8]) -> Result<Vec<DecodedSignal>, String> {
+        MessageDef::decode_signals(self, data)
+            .map(|signals| {
+                signals
+                    .into_iter()
+                    .map(|s| DecodedSignal {
+                        name: s.name,
+                        value: s.value,
+                        symbol: s.symbol,
+                    })
+                    .collect()
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    fn decode_signal(&self, data: &[u8], name: &str) -> Result<f64, String> {
+        MessageDef::decode_signal(self, data, name).map_err(|e| e.to_string())
+    }
+
+    fn boxed(&self) -> Box<dyn MessageCodec> {
+        Box::new(self.clone())
+    }
+}
+
+/// The DBC [`Network`] as a protocol-neutral [`SignalCodec`].
+impl SignalCodec for Network {
+    fn message_by_id(&self, id: u32) -> Option<&dyn MessageCodec> {
+        self.message(id).map(|m| m as &dyn MessageCodec)
+    }
+
+    fn message_by_name(&self, name: &str) -> Option<&dyn MessageCodec> {
+        self.messages
+            .values()
+            .find(|m| m.name == name)
+            .map(|m| m as &dyn MessageCodec)
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod seam_tests {
     use super::*;
 
     fn signal(
@@ -422,5 +486,29 @@ mod tests {
             m.decode_signals(&[0u8; 2]),
             Err(CodecError::ShortData(2, 8))
         );
+    }
+
+    #[test]
+    fn message_codec_adapter_delegates() {
+        let m = msg(vec![signal("v", 0, 16, ByteOrder::Intel, false, 0.1, 0.0)]);
+        let codec: &dyn MessageCodec = &m;
+        assert_eq!(codec.id(), 0x100);
+        let data = codec.encode_signals(&[("v", 45.6)]).unwrap();
+        assert!((codec.decode_signal(&data, "v").unwrap() - 45.6).abs() < 1e-9);
+        assert!(codec.check_value("v", 50000.0).is_err());
+        assert!(codec.check_value("nope", 1.0).is_err());
+    }
+
+    #[test]
+    fn network_signal_codec_resolves_by_id_and_name() {
+        let mut n = Network::new();
+        n.messages.insert(0x100, msg(vec![]).clone());
+        let codec: &dyn SignalCodec = &n;
+        assert_eq!(codec.message_by_id(0x100).unwrap().id(), 0x100);
+        assert_eq!(codec.message_by_name("Test").unwrap().id(), 0x100);
+        assert!(codec.message_by_id(0x200).is_none());
+        assert!(codec.message_by_name("Nope").is_none());
+        assert!(codec.owned_message_by_id(0x100).is_some());
+        assert!(codec.owned_message_by_name("Test").is_some());
     }
 }

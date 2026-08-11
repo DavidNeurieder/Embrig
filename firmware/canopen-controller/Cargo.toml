@@ -1,0 +1,10 @@
+[package]
+name = "fw-canopen-controller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Minimal CANopen (CiA 301) node firmware used by the embrig-canopen software-in-the-loop example"
+
+[dependencies]
+embrig-core = { workspace = true }
+embrig-canopen = { workspace = true }

@@ -11,11 +11,11 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
+use embrig_core::codec::MessageCodec;
 use embrig_core::frame::CanFrame;
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
 use embrig_core::{EcuError, NetEcu};
-use embrig_dbc::MessageDef;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_STEP_US: u64 = 1_000;
@@ -186,7 +186,7 @@ impl VehicleConfig {
 
 /// Convert a YAML literal to a physical value for a signal.
 pub fn literal_to_physical(
-    message: &MessageDef,
+    message: &dyn MessageCodec,
     name: &str,
     lit: &SignalLiteral,
 ) -> Result<f64, EcuError> {
@@ -199,14 +199,17 @@ pub fn literal_to_physical(
     }
 }
 
-/// A config-driven vECU: periodically transmits a fixed DBC message with the
+/// A config-driven vECU: periodically transmits a fixed message with the
 /// configured signal values.
 ///
 /// [`Ecu::set_signal`] overrides a signal for the next transmission, which is
 /// how tests inject stimulus (e.g. an over-voltage on the battery bus).
+///
+/// The transmitted message is a boxed [`MessageCodec`], so a config node can
+/// speak any protocol (DBC today, CANopen for the SIL demo).
 pub struct ConfigEcu {
     name: String,
-    message: MessageDef,
+    codec: Box<dyn MessageCodec>,
     values: BTreeMap<String, f64>,
     period: Timestamp,
     next: Timestamp,
@@ -215,22 +218,22 @@ pub struct ConfigEcu {
 impl ConfigEcu {
     pub fn new(
         name: impl Into<String>,
-        message: MessageDef,
+        codec: Box<dyn MessageCodec>,
         period: Timestamp,
         initial: &BTreeMap<String, SignalLiteral>,
     ) -> Result<Self, EcuError> {
         let name = name.into();
         let mut values = BTreeMap::new();
         for (sig, lit) in initial {
-            let v = literal_to_physical(&message, sig, lit)?;
-            message
+            let v = literal_to_physical(&*codec, sig, lit)?;
+            codec
                 .check_value(sig, v)
                 .map_err(|e| EcuError::InvalidValue(e.to_string()))?;
             values.insert(sig.clone(), v);
         }
         Ok(Self {
             name,
-            message,
+            codec,
             values,
             period,
             next: 0,
@@ -248,8 +251,8 @@ impl NetEcu<CanFrame> for ConfigEcu {
             return;
         }
         let values: Vec<(&str, f64)> = self.values.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-        if let Ok(data) = self.message.encode_signals(&values) {
-            if let Ok(frame) = CanFrame::new(self.message.id, data) {
+        if let Ok(data) = self.codec.encode_signals(&values) {
+            if let Ok(frame) = CanFrame::new(self.codec.id(), data) {
                 out.push(frame);
             }
         }
@@ -257,20 +260,16 @@ impl NetEcu<CanFrame> for ConfigEcu {
     }
 
     fn set_signal(&mut self, id: u32, signal: &str, value: SignalValue) -> Result<(), EcuError> {
-        if id != self.message.id {
+        if id != self.codec.id() {
             return Err(EcuError::UnknownMessage(format!("0x{id:03X}")));
         }
         let physical = match value {
             SignalValue::Num(v) => v,
-            SignalValue::Str(s) => {
-                self.message
-                    .physical_for_symbol(signal, &s)
-                    .ok_or_else(|| {
-                        EcuError::InvalidValue(format!("unknown symbol `{s}` for `{signal}`"))
-                    })?
-            }
+            SignalValue::Str(s) => self.codec.physical_for_symbol(signal, &s).ok_or_else(|| {
+                EcuError::InvalidValue(format!("unknown symbol `{s}` for `{signal}`"))
+            })?,
         };
-        self.message
+        self.codec
             .check_value(signal, physical)
             .map_err(|e| EcuError::InvalidValue(e.to_string()))?;
         self.values.insert(signal.to_string(), physical);
@@ -282,7 +281,7 @@ impl NetEcu<CanFrame> for ConfigEcu {
 mod tests {
     use super::*;
     use embrig_core::network::CanSimExt;
-    use embrig_dbc::ByteOrder;
+    use embrig_dbc::{ByteOrder, MessageDef};
 
     fn message() -> MessageDef {
         MessageDef {
@@ -325,8 +324,13 @@ mod tests {
         let mut initial = BTreeMap::new();
         initial.insert("voltage".into(), SignalLiteral::Num(400.0));
         initial.insert("state".into(), SignalLiteral::Str("READY".into()));
-        let ecu =
-            ConfigEcu::new("battery", message(), embrig_core::time::ms(100), &initial).unwrap();
+        let ecu = ConfigEcu::new(
+            "battery",
+            Box::new(message()),
+            embrig_core::time::ms(100),
+            &initial,
+        )
+        .unwrap();
         let mut sim = embrig_core::Simulation::new(embrig_core::time::US_PER_MS);
         sim.attach(Box::new(ecu), &[]);
         sim.run_ms(100);
@@ -341,8 +345,13 @@ mod tests {
     fn set_signal_overrides_next_frame() {
         let mut initial = BTreeMap::new();
         initial.insert("voltage".into(), SignalLiteral::Num(400.0));
-        let ecu =
-            ConfigEcu::new("battery", message(), embrig_core::time::ms(100), &initial).unwrap();
+        let ecu = ConfigEcu::new(
+            "battery",
+            Box::new(message()),
+            embrig_core::time::ms(100),
+            &initial,
+        )
+        .unwrap();
         let mut sim = embrig_core::Simulation::new(embrig_core::time::US_PER_MS);
         sim.attach(Box::new(ecu), &[]);
         sim.set_signal(0, 0x100, "voltage", SignalValue::Num(500.0))
@@ -359,8 +368,13 @@ mod tests {
     fn set_signal_errors_on_bad_symbol() {
         let mut initial = BTreeMap::new();
         initial.insert("state".into(), SignalLiteral::Str("READY".into()));
-        let mut ecu =
-            ConfigEcu::new("battery", message(), embrig_core::time::ms(100), &initial).unwrap();
+        let mut ecu = ConfigEcu::new(
+            "battery",
+            Box::new(message()),
+            embrig_core::time::ms(100),
+            &initial,
+        )
+        .unwrap();
         let err = ecu.set_signal(0x100, "state", SignalValue::Str("NOPE".into()));
         assert_eq!(
             err,
