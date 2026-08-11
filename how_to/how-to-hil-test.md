@@ -161,6 +161,20 @@ embrig test my-project/vehicle.yaml tests/ --interface can0
 embrig test my-project/vehicle.yaml my-suite.yaml --interface can0
 ```
 
+Or drive the same path from a runnable example (handy without a terminal-facing
+CLI install, and the fastest way to prove the stack on a `vcan` bus):
+
+```sh
+cargo run --example can_hil --package embrig-test --features socketcan
+```
+
+It defaults to the `ev-powertrain` fixture on the first `socketcan` interface in
+`vehicle.yaml` (or `vcan0`); pass `INTERFACE VEHICLE [TEST...]` to override:
+
+```sh
+cargo run --example can_hil --package embrig-test --features socketcan -- can0 my-project/vehicle.yaml tests/
+```
+
 Results go to stdout (`PASS`/`FAIL` per test, then totals) and the exit code is
 non-zero on any failure. For a report:
 
