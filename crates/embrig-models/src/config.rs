@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use embrig_core::frame::CanFrame;
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
-use embrig_core::{Ecu, EcuError};
+use embrig_core::{EcuError, NetEcu};
 use embrig_dbc::MessageDef;
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,8 @@ pub enum EcuKind {
     /// Motor: RUNNING when enabled, otherwise SAFE.
     Motor,
     /// The system under test for software-in-the-loop: firmware compiled for
-    /// the host. The implementation is bound in code via an [`EcuFactory`].
+    /// the host. The implementation is bound in code via a
+    /// [`NetEcuFactory`](embrig_core::network::NetEcuFactory).
     Sil,
 }
 
@@ -127,7 +128,8 @@ pub enum EthEcuKind {
     #[serde(rename = "udp-config")]
     UdpConfig,
     /// The system under test for software-in-the-loop: firmware compiled for
-    /// the host, bound in code via a [`UdpEcuFactory`] (from `embrig-net`).
+    /// the host, bound in code via a
+    /// [`NetEcuFactory`](embrig_core::network::NetEcuFactory).
     #[serde(rename = "udp-sil")]
     UdpSil,
 }
@@ -236,7 +238,7 @@ impl ConfigEcu {
     }
 }
 
-impl Ecu for ConfigEcu {
+impl NetEcu<CanFrame> for ConfigEcu {
     fn name(&self) -> &str {
         &self.name
     }
@@ -256,7 +258,7 @@ impl Ecu for ConfigEcu {
 
     fn set_signal(&mut self, id: u32, signal: &str, value: SignalValue) -> Result<(), EcuError> {
         if id != self.message.id {
-            return Err(EcuError::UnknownMessage(id));
+            return Err(EcuError::UnknownMessage(format!("0x{id:03X}")));
         }
         let physical = match value {
             SignalValue::Num(v) => v,
@@ -279,6 +281,7 @@ impl Ecu for ConfigEcu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use embrig_core::network::CanSimExt;
     use embrig_dbc::ByteOrder;
 
     fn message() -> MessageDef {
@@ -328,7 +331,7 @@ mod tests {
         sim.attach(Box::new(ecu), &[]);
         sim.run_ms(100);
         assert_eq!(sim.frame_counts(), vec![(0x100, 1)]);
-        let frame = sim.recorder().last_frame(0x100).unwrap();
+        let frame = sim.recorder().last_message(&0x100).unwrap();
         let decoded = message().decode_signals(&frame.data).unwrap();
         assert_eq!(decoded[0].value, 400.0);
         assert_eq!(decoded[1].symbol.as_deref(), Some("READY"));
@@ -345,7 +348,7 @@ mod tests {
         sim.set_signal(0, 0x100, "voltage", SignalValue::Num(500.0))
             .unwrap();
         sim.run_ms(100);
-        let frame = sim.recorder().last_frame(0x100).unwrap();
+        let frame = sim.recorder().last_message(&0x100).unwrap();
         assert_eq!(
             message().decode_signal(&frame.data, "voltage").unwrap(),
             500.0

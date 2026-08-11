@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use embrig_core::network::CanSimExt;
 use embrig_core::recorder::Record;
 use embrig_models::{load_vehicle_config, VehicleConfig};
 
@@ -104,7 +105,7 @@ fn cmd_simulate(vehicle: &Path, duration: &str, verbose: bool) -> Result<i32> {
     if verbose {
         for record in &sim.recorder().records {
             match record {
-                Record::Frame(frame) => println!("{frame}"),
+                Record::Message(frame) => println!("{frame}"),
                 Record::Event {
                     ts,
                     source,

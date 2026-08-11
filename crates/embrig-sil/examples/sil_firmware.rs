@@ -8,15 +8,15 @@
 //!
 //! `fixtures/vehicle.yaml` declares a `sensor` config node and a
 //! `controller` node with `type: sil`. The firmware for `controller` is a
-//! plain [`Ecu`] implementation in this file, registered by name. `sil_run`
+//! plain [`NetEcu`] implementation in this file, registered by name. `sil_run`
 //! builds the simulation, runs every suite, and reports pass/fail per test.
 
 use std::path::Path;
 use std::sync::OnceLock;
 
-use embrig_core::ecu::{Ecu, EcuError};
 use embrig_core::frame::CanFrame;
 use embrig_core::time::Timestamp;
+use embrig_core::{NetEcu, NetEcuError};
 use embrig_dbc::Network;
 use embrig_models::load_vehicle_config;
 use embrig_sil::{sil_run, SilRegistry};
@@ -50,7 +50,7 @@ impl ControllerFirmware {
     }
 }
 
-impl Ecu for ControllerFirmware {
+impl NetEcu<CanFrame> for ControllerFirmware {
     fn name(&self) -> &str {
         &self.name
     }
@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     let mut registry = SilRegistry::new();
     registry.register(
         "controller",
-        |name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+        |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
             Ok(Box::new(ControllerFirmware::new(name)))
         },
     );

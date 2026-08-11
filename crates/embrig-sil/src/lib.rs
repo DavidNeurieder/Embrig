@@ -1,9 +1,10 @@
 //! Software-in-the-loop: run host-compiled firmware against the virtual bus.
 //!
-//! A [`SilRegistry`] maps the `type: sil` ECU names in `vehicle.yaml` to the
-//! firmware that implements them. Firmware is ordinary Rust implementing the
-//! [`Ecu`] trait — the same interface the built-in vECUs use — but compiled
-//! for the host, so a suite runs against the real firmware without hardware.
+//! A [`SilRegistry`] (a CAN-flavoured [`NetRegistry<CanFrame>`]) maps the
+//! `type: sil` ECU names in `vehicle.yaml` to the firmware that implements
+//! them. Firmware is ordinary Rust implementing the [`NetEcu`] trait — the
+//! same interface the built-in vECUs use — but compiled for the host, so a
+//! suite runs against the real firmware without hardware.
 //!
 //! [`SilTarget`] is a [`TestTarget`] (drop-in for `embrig_test::VirtualTarget`)
 //! so the exact same YAML suites run against virtual ECUs, SIL firmware and —
@@ -11,11 +12,11 @@
 //!
 //! ```no_run
 //! # use embrig_sil::{sil_run, SilRegistry};
-//! # use embrig_core::ecu::{Ecu, EcuError};
+//! # use embrig_core::{NetEcu, NetEcuError};
 //! # use embrig_core::time::Timestamp;
 //! # use embrig_core::frame::CanFrame;
 //! # struct NoopFirmware;
-//! # impl Ecu for NoopFirmware {
+//! # impl NetEcu<CanFrame> for NoopFirmware {
 //! #     fn name(&self) -> &str { "noop" }
 //! # }
 //! # let config: embrig_models::VehicleConfig = unimplemented!();
@@ -23,7 +24,7 @@
 //! let mut registry = SilRegistry::new();
 //! registry.register(
 //!     "controller",
-//!     |_name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+//!     |_name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
 //!         Ok(Box::new(NoopFirmware))
 //!     },
 //! );
@@ -41,16 +42,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
-use embrig_core::ecu::{Ecu, EcuError};
 use embrig_core::fault::{Fault, FaultRule};
 use embrig_core::frame::CanFrame;
+use embrig_core::network::NetRegistry;
 use embrig_core::signal::SignalValue;
 use embrig_core::simulation::Simulation;
 use embrig_core::time::Timestamp;
 use embrig_dbc::Network;
-use embrig_models::{build_simulation_indexed_with, EcuFactory, ModelError, VehicleConfig};
+use embrig_models::{build_simulation_indexed_with, ModelError, VehicleConfig};
 use embrig_test::target::{BoxFut, CanLink, NetmapLink, POLL_US};
 use embrig_test::{run_suite, SuiteResult, TargetError, TestError, TestTarget};
 use thiserror::Error;
@@ -70,107 +70,11 @@ pub enum SilError {
 
 /// A firmware factory registry keyed by the `type: sil` ECU name.
 ///
-/// Factories are looked up (and re-invoked) every time the simulation is
-/// built, i.e. once at startup and again on each test reset — so firmware
-/// state never leaks between tests.
-#[derive(Default)]
-pub struct SilRegistry {
-    factories: HashMap<String, Box<dyn EcuFactory>>,
-}
-
-impl SilRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register the firmware for an ECU. `factory` may be any [`EcuFactory`],
-    /// including a plain closure.
-    pub fn register(
-        &mut self,
-        name: impl Into<String>,
-        factory: impl EcuFactory + 'static,
-    ) -> &mut Self {
-        self.factories.insert(name.into(), Box::new(factory));
-        self
-    }
-
-    /// The registered ECU names, sorted (for diagnostics).
-    pub fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.factories.keys().cloned().collect();
-        names.sort();
-        names
-    }
-}
-
-impl EcuFactory for SilRegistry {
-    fn create(&self, name: &str, step_budget_us: u64) -> Result<Box<dyn Ecu>, EcuError> {
-        let factory = self.factories.get(name).ok_or_else(|| {
-            EcuError::NotRegistered(format!(
-                "`{name}` (registered: {})",
-                self.names().join(", ")
-            ))
-        })?;
-        let inner = factory.create(name, step_budget_us)?;
-        Ok(Box::new(BudgetedEcu::new(inner, step_budget_us)))
-    }
-}
-
-impl EcuFactory for &SilRegistry {
-    fn create(&self, name: &str, step_budget_us: u64) -> Result<Box<dyn Ecu>, EcuError> {
-        SilRegistry::create(self, name, step_budget_us)
-    }
-}
-
-/// Wall-clock budget enforcement around one firmware ECU.
-///
-/// Panics if a single `update`/`on_message` call takes longer than
-/// `budget_us`; [`SilTarget`] converts that panic into a test failure. The
-/// simulation is rebuilt per test, so a panicked step discards the firmware
-/// state and the next test starts clean.
-struct BudgetedEcu {
-    inner: Box<dyn Ecu>,
-    budget_us: u64,
-    step_start: Instant,
-}
-
-impl BudgetedEcu {
-    fn new(inner: Box<dyn Ecu>, budget_us: u64) -> Self {
-        Self {
-            inner,
-            budget_us,
-            step_start: Instant::now(),
-        }
-    }
-}
-
-impl Ecu for BudgetedEcu {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn update(&mut self, time: Timestamp, out: &mut Vec<CanFrame>) {
-        self.step_start = Instant::now();
-        self.inner.update(time, out);
-        check_budget(self.inner.name(), self.budget_us, self.step_start);
-    }
-
-    fn on_message(&mut self, frame: &CanFrame, time: Timestamp) {
-        self.step_start = Instant::now();
-        self.inner.on_message(frame, time);
-        check_budget(self.inner.name(), self.budget_us, self.step_start);
-    }
-
-    fn set_signal(&mut self, id: u32, signal: &str, value: SignalValue) -> Result<(), EcuError> {
-        self.inner.set_signal(id, signal, value)
-    }
-}
-
-fn check_budget(name: &str, budget_us: u64, start: Instant) {
-    let took_us = start.elapsed().as_micros() as u64;
-    if took_us > budget_us {
-        panic!("firmware `{name}` exceeded its {budget_us}µs step budget (took {took_us}µs)");
-    }
-}
+/// This is the unified [`NetRegistry`] specialized for CAN. Factories are
+/// looked up (and re-invoked) every time the simulation is built, i.e. once
+/// at startup and again on each test reset — so firmware state never leaks
+/// between tests.
+pub type SilRegistry = NetRegistry<CanFrame>;
 
 /// A [`TestTarget`] running the YAML suites against host-compiled firmware.
 ///
@@ -297,7 +201,7 @@ impl CanLink for SilTarget {
     fn poll(&mut self, id: u32) -> BoxFut<'_, Result<Option<CanFrame>, TargetError>> {
         Box::pin(async move {
             self.run_sim(|sim| sim.run_for(POLL_US))?;
-            Ok(self.sim.recorder().last_frame(id).cloned())
+            Ok(self.sim.recorder().last_message(&id).cloned())
         })
     }
 }
@@ -349,6 +253,8 @@ pub fn sil_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use embrig_core::time::Timestamp;
+    use embrig_core::{NetEcu, NetEcuError};
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -444,7 +350,7 @@ interfaces:
         }
     }
 
-    impl Ecu for TestFirmware {
+    impl NetEcu<CanFrame> for TestFirmware {
         fn name(&self) -> &str {
             &self.name
         }
@@ -479,7 +385,7 @@ interfaces:
         let mut registry = SilRegistry::new();
         registry.register(
             "controller",
-            |name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+            |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
                 Ok(Box::new(TestFirmware::new(name)))
             },
         );
@@ -516,11 +422,11 @@ interfaces:
         let mut registry = SilRegistry::new();
         registry.register(
             "controller",
-            |name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+            |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
                 struct Slow {
                     name: String,
                 }
-                impl Ecu for Slow {
+                impl NetEcu<CanFrame> for Slow {
                     fn name(&self) -> &str {
                         &self.name
                     }
@@ -581,7 +487,7 @@ interfaces:
         let counter = instances.clone();
         registry.register(
             "controller",
-            move |name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+            move |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
                 counter.fetch_add(1, Ordering::SeqCst);
                 Ok(Box::new(TestFirmware::new(name)))
             },

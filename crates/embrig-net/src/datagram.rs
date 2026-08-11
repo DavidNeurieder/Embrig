@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 
+use embrig_core::network::NetMessage;
 use embrig_core::time::Timestamp;
 
 /// A UDP datagram travelling on a simulated or real Ethernet network.
@@ -23,6 +24,32 @@ impl UdpDatagram {
             payload,
             ts: 0,
         }
+    }
+}
+
+impl NetMessage<SocketAddr> for UdpDatagram {
+    fn key(&self) -> SocketAddr {
+        self.dst
+    }
+
+    fn payload_mut(&mut self) -> &mut [u8] {
+        &mut self.payload
+    }
+
+    fn ts(&self) -> Timestamp {
+        self.ts
+    }
+
+    fn set_ts(&mut self, ts: Timestamp) {
+        self.ts = ts;
+    }
+
+    fn noun(&self) -> &'static str {
+        "datagram"
+    }
+
+    fn label(&self) -> String {
+        format!("{}", self.dst)
     }
 }
 

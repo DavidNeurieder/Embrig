@@ -17,11 +17,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use embrig_core::network::{NetEcuFactory, NetRegistry};
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
 use embrig_dbc::Network;
 use embrig_models::{EthEcuKind, NetworkConfig, SignalLiteral, VehicleConfig};
-use embrig_net::{Netmap, UdpDatagram, UdpEcuFactory, UdpFault, UdpFaultRule, UdpRegistry, UdpSim};
+use embrig_net::{Netmap, UdpDatagram, UdpFault, UdpFaultRule, UdpSim};
 use thiserror::Error;
 
 use crate::target::{BoxFut, CanLink, NetmapLink, TargetError, TestTarget, POLL_US};
@@ -49,13 +50,13 @@ pub struct BuiltUdpSim {
 ///
 /// Config ECUs (`type: udp-config`) transmit their netmap message on a fixed
 /// period; `type: udp-sil` ECUs are created through `factories` (see
-/// [`UdpRegistry`]). ECUs are attached in config order, which keeps the
+/// [`NetRegistry`]). ECUs are attached in config order, which keeps the
 /// simulation deterministic.
 pub fn build_udp_simulation_with(
     config: &VehicleConfig,
     net_config: &NetworkConfig,
     netmap: &Netmap,
-    factories: impl UdpEcuFactory,
+    factories: impl NetEcuFactory<UdpDatagram>,
 ) -> Result<BuiltUdpSim, TargetError> {
     let _ = net_config;
     let mut sim = UdpSim::new(config.step_us);
@@ -101,7 +102,7 @@ pub fn build_udp_simulation(
     net_config: &NetworkConfig,
     netmap: &Netmap,
 ) -> Result<BuiltUdpSim, TargetError> {
-    build_udp_simulation_with(config, net_config, netmap, UdpRegistry::new())
+    build_udp_simulation_with(config, net_config, netmap, NetRegistry::new())
 }
 
 /// Convert YAML field literals (numeric, boolean or symbolic) to signal
@@ -217,7 +218,7 @@ impl NetmapLink for UdpTarget {
     ) -> BoxFut<'_, Result<Option<UdpDatagram>, TargetError>> {
         Box::pin(async move {
             self.sim.run_for(POLL_US);
-            Ok(self.sim.recorder().last_datagram(dst).cloned())
+            Ok(self.sim.last_datagram(dst).cloned())
         })
     }
 
@@ -290,7 +291,7 @@ pub struct UdpSutTarget {
     config: VehicleConfig,
     net_config: NetworkConfig,
     netmap_path: PathBuf,
-    registry: UdpRegistry,
+    registry: NetRegistry<UdpDatagram>,
 }
 
 impl UdpSutTarget {
@@ -300,7 +301,7 @@ impl UdpSutTarget {
         config: &VehicleConfig,
         net_config: &NetworkConfig,
         netmap_path: &Path,
-        registry: UdpRegistry,
+        registry: NetRegistry<UdpDatagram>,
     ) -> Result<Self, TargetError> {
         let netmap = load_netmap(netmap_path)?;
         let built = build_udp_simulation_with(config, net_config, &netmap, &registry)?;
@@ -325,7 +326,7 @@ impl UdpSutTarget {
     }
 
     /// The firmware registry (for diagnostics).
-    pub fn registry(&self) -> &UdpRegistry {
+    pub fn registry(&self) -> &NetRegistry<UdpDatagram> {
         &self.registry
     }
 
@@ -376,7 +377,7 @@ impl NetmapLink for UdpSutTarget {
     ) -> BoxFut<'_, Result<Option<UdpDatagram>, TargetError>> {
         Box::pin(async move {
             self.run_sim(|sim| sim.run_for(POLL_US))?;
-            Ok(self.sim.recorder().last_datagram(dst).cloned())
+            Ok(self.sim.last_datagram(dst).cloned())
         })
     }
 
@@ -596,7 +597,7 @@ pub fn udp_run_with_firmware(
     config: &VehicleConfig,
     net_config: &NetworkConfig,
     netmap_path: &Path,
-    registry: UdpRegistry,
+    registry: NetRegistry<UdpDatagram>,
     files: &[PathBuf],
 ) -> Result<SuiteResult, UdpError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -613,7 +614,7 @@ pub fn udp_run_with_firmware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use embrig_net::UdpEcuError;
+    use embrig_core::{NetEcu, NetEcuError};
     use std::io::Write;
 
     const NETMAP: &str = r#"
@@ -824,12 +825,12 @@ interfaces:
         }
     }
 
-    impl embrig_net::UdpEcu for TestFirmware {
+    impl NetEcu<UdpDatagram> for TestFirmware {
         fn name(&self) -> &str {
             &self.name
         }
 
-        fn on_datagram(&mut self, dg: &UdpDatagram, _time: Timestamp) {
+        fn on_message(&mut self, dg: &UdpDatagram, _time: Timestamp) {
             if let Some(m) = self.netmap.message("DriveCommand") {
                 if dg.payload.len() >= m.length {
                     self.forward = m
@@ -872,13 +873,13 @@ interfaces:
         cfg
     }
 
-    fn firmware_registry() -> UdpRegistry {
+    fn firmware_registry() -> NetRegistry<UdpDatagram> {
         let motion: SocketAddr = MOTION.parse().unwrap();
         let netmap: Netmap = serde_saphyr::from_str(NETMAP).unwrap();
-        let mut registry = UdpRegistry::new();
+        let mut registry = NetRegistry::new();
         registry.register(
             "motion",
-            move |name: &str, _budget: u64| -> Result<Box<dyn embrig_net::UdpEcu>, UdpEcuError> {
+            move |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<UdpDatagram>>, NetEcuError> {
                 Ok(Box::new(TestFirmware::new(name, netmap.clone(), motion)))
             },
         );
@@ -931,7 +932,7 @@ interfaces:
             &sil_vehicle(),
             &net_config(),
             &netmap_file(),
-            UdpRegistry::new(),
+            NetRegistry::new(),
         ) {
             Ok(_) => panic!("expected a clear startup error"),
             Err(e) => e,

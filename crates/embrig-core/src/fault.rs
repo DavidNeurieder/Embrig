@@ -1,3 +1,4 @@
+use crate::network::{NetAction, NetFault};
 use crate::time::Timestamp;
 
 /// A fault injected into the simulated bus.
@@ -14,26 +15,29 @@ pub enum Fault {
     CorruptByte { id: u32, byte: usize, mask: u8 },
 }
 
-/// A fault rule bound to a time window.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FaultRule {
-    pub fault: Fault,
-    pub start: Timestamp,
-    pub duration: Option<Timestamp>,
-}
-
-impl FaultRule {
-    /// Whether the rule is active at `now`.
-    pub fn active_at(&self, now: Timestamp) -> bool {
-        if now < self.start {
-            return false;
+impl NetFault<u32> for Fault {
+    fn matches(&self, key: &u32) -> bool {
+        match self {
+            Fault::DropFrame { id } => id == key,
+            Fault::DelayFrame { id, .. } => id == key,
+            Fault::CorruptByte { id, .. } => id == key,
         }
-        match self.duration {
-            None => true,
-            Some(d) => now < self.start + d,
+    }
+
+    fn action(&self) -> NetAction {
+        match self {
+            Fault::DropFrame { .. } => NetAction::Drop,
+            Fault::DelayFrame { delay_us, .. } => NetAction::Delay(*delay_us),
+            Fault::CorruptByte { byte, mask, .. } => NetAction::Corrupt {
+                byte: *byte,
+                mask: *mask,
+            },
         }
     }
 }
+
+/// A CAN fault rule bound to a time window.
+pub type FaultRule = crate::network::NetFaultRule<Fault>;
 
 #[cfg(test)]
 mod tests {

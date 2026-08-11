@@ -8,7 +8,7 @@
 //!
 //! `robot/vehicle.yaml` declares two config nodes — `joystick`
 //! (`DriveCommand`) and `e-stop` (`EStop`) — plus a `motion` node with
-//! `type: sil`. The firmware for `motion` is a plain [`Ecu`] implementation
+//! `type: sil`. The firmware for `motion` is a plain [`NetEcu`] implementation
 //! in this file, registered by name. The suites exercise the rover's
 //! fail-safes: drive on command, e-stop halts, e-stop release resumes, and
 //! commands above the speed limit are refused.
@@ -16,9 +16,9 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use embrig_core::ecu::{Ecu, EcuError};
 use embrig_core::frame::CanFrame;
 use embrig_core::time::Timestamp;
+use embrig_core::{NetEcu, NetEcuError};
 use embrig_dbc::Network;
 use embrig_models::load_vehicle_config;
 use embrig_sil::{sil_run, SilRegistry};
@@ -79,7 +79,7 @@ impl RobotFirmware {
     }
 }
 
-impl Ecu for RobotFirmware {
+impl NetEcu<CanFrame> for RobotFirmware {
     fn name(&self) -> &str {
         &self.name
     }
@@ -151,7 +151,7 @@ fn main() -> anyhow::Result<()> {
     let mut registry = SilRegistry::new();
     registry.register(
         "motion",
-        |name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+        |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
             Ok(Box::new(RobotFirmware::new(name)))
         },
     );

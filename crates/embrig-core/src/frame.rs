@@ -1,3 +1,4 @@
+use crate::network::NetMessage;
 use crate::time::Timestamp;
 
 /// A CAN frame travelling on a simulated or real bus.
@@ -39,6 +40,32 @@ impl CanFrame {
         let bytes = value.to_le_bytes();
         self.data[offset] = bytes[0];
         self.data[offset + 1] = bytes[1];
+    }
+}
+
+impl NetMessage<u32> for CanFrame {
+    fn key(&self) -> u32 {
+        self.id
+    }
+
+    fn payload_mut(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
+
+    fn ts(&self) -> Timestamp {
+        self.ts
+    }
+
+    fn set_ts(&mut self, ts: Timestamp) {
+        self.ts = ts;
+    }
+
+    fn noun(&self) -> &'static str {
+        "frame"
+    }
+
+    fn label(&self) -> String {
+        format!("0x{:03X}", self.id)
     }
 }
 

@@ -11,6 +11,13 @@
 //! carries named fields at fixed byte offsets. Test steps key by message name,
 //! so suites look the same whether they run against the virtual network, SIL
 //! firmware or a real Ethernet link.
+//!
+//! All simulation engines, ECU traits, error types and firmware registries are
+//! the unified ones from [`embrig_core::network`], specialized per transport:
+//! `NetworkSim<SocketAddr, UdpDatagram, UdpFault>` and
+//! `NetworkSim<SocketAddr, TcpSegment, TcpFault>`. This crate only adds the
+//! message types, the netmap codec and the thin transport wrappers
+//! ([`UdpSim`], [`TcpSim`], [`UdpConfigEcu`], [`TcpConfigEcu`]).
 
 pub mod datagram;
 pub mod ecu;
@@ -19,10 +26,7 @@ pub mod sim;
 pub mod tcp;
 
 pub use datagram::UdpDatagram;
-pub use ecu::{NoFirmware, UdpConfigEcu, UdpEcu, UdpEcuError, UdpEcuFactory, UdpRegistry};
+pub use ecu::UdpConfigEcu;
 pub use netmap::{DecodedField, FieldDef, FieldError, FieldType, MessageDef, Netmap};
 pub use sim::{UdpFault, UdpFaultRule, UdpRecord, UdpRecorder, UdpSim};
-pub use tcp::{
-    NoTcpFirmware, TcpConfigEcu, TcpEcu, TcpEcuError, TcpEcuFactory, TcpFault, TcpFaultRule,
-    TcpRecord, TcpRecorder, TcpRegistry, TcpSegment, TcpSim,
-};
+pub use tcp::{TcpConfigEcu, TcpFault, TcpFaultRule, TcpRecord, TcpRecorder, TcpSegment, TcpSim};

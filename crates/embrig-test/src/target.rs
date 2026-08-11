@@ -289,7 +289,7 @@ impl CanLink for VirtualTarget {
     fn poll(&mut self, id: u32) -> BoxFut<'_, Result<Option<CanFrame>, TargetError>> {
         Box::pin(async move {
             self.sim.run_for(POLL_US);
-            Ok(self.sim.recorder().last_frame(id).cloned())
+            Ok(self.sim.recorder().last_message(&id).cloned())
         })
     }
 }

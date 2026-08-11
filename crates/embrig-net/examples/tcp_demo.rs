@@ -2,13 +2,13 @@
 //!
 //! Shows that the message-map transport pattern extends beyond UDP: the
 //! netmap field codec, the config-driven stimulus node (`TcpConfigEcu`) and
-//! the firmware factory registry (`TcpRegistry`, the `SilRegistry`/`UdpRegistry`
-//! pattern) are all reused unchanged, only the transport differs.
+//! the firmware factory registry (the unified `NetRegistry`, also used by the
+//! CAN `SilRegistry` and the UDP stack) are all reused unchanged, only the
 //!
 //! Scenario (deterministic, step 1 ms):
 //! * `joystick` (config ECU, host) transmits `DriveCommand` to the `motion`
 //!   node every 20 ms.
-//! * `motion` (host-compiled firmware via `TcpRegistry`) echoes its `speed`
+//! * `motion` (host-compiled firmware via `NetRegistry`) echoes its `speed`
 //!   back to the host as `MotionState` every 10 ms.
 //! * A windowed `Drop` fault resets the `MotionState` connection during
 //!   [40 ms, 80 ms) — the host sees no telemetry, then it recovers.
@@ -18,11 +18,12 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
+use embrig_core::network::{NetEcu, NetEcuError, NetEcuFactory, NetRegistry};
 use embrig_core::signal::SignalValue;
 use embrig_core::time::{ms, Timestamp};
 use embrig_net::{
-    FieldDef, FieldType, MessageDef, Netmap, TcpConfigEcu, TcpEcu, TcpEcuError, TcpEcuFactory,
-    TcpFault, TcpFaultRule, TcpRegistry, TcpSegment, TcpSim,
+    FieldDef, FieldType, MessageDef, Netmap, TcpConfigEcu, TcpFault, TcpFaultRule, TcpSegment,
+    TcpSim,
 };
 
 const HOST: &str = "192.168.1.10:5000";
@@ -74,12 +75,12 @@ struct MotionFirmware {
     next: Timestamp,
 }
 
-impl TcpEcu for MotionFirmware {
+impl NetEcu<TcpSegment> for MotionFirmware {
     fn name(&self) -> &str {
         &self.name
     }
 
-    fn on_segment(&mut self, seg: &TcpSegment, _time: Timestamp) {
+    fn on_message(&mut self, seg: &TcpSegment, _time: Timestamp) {
         if let Ok(cmd) = self.drive.decode_field(&seg.payload, "forward") {
             self.speed = cmd.value;
             self.pending = true;
@@ -122,10 +123,10 @@ fn main() {
     // The node under test, bound through the firmware registry.
     let drive = netmap.message("DriveCommand").unwrap().clone();
     let report = netmap.message("MotionState").unwrap().clone();
-    let mut firmware = TcpRegistry::new();
+    let mut firmware = NetRegistry::<TcpSegment>::new();
     firmware.register(
         "motion",
-        move |name: &str, _budget: u64| -> Result<Box<dyn TcpEcu>, TcpEcuError> {
+        move |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<TcpSegment>>, NetEcuError> {
             Ok(Box::new(MotionFirmware {
                 name: name.to_string(),
                 src: motion,
@@ -153,7 +154,7 @@ fn main() {
     println!("TCP proof transport (deterministic, step {STEP_US}us)");
     let delivered: Vec<&TcpSegment> = sim
         .recorder()
-        .segments()
+        .messages()
         .into_iter()
         .filter(|s| s.dst == host)
         .collect();

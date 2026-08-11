@@ -2,7 +2,7 @@
 //! EV-powertrain vECUs (charger, VCU, motor), plus the [`build_simulation`]
 //! entry point that turns a [`VehicleConfig`] into a runnable [`Simulation`].
 //! `type: sil` ECU nodes are bound to host-compiled firmware through the
-//! [`EcuFactory`] hook ([`build_simulation_indexed_with`]).
+//! [`embrig_core::NetEcuFactory`] hook ([`build_simulation_indexed_with`]).
 
 pub mod config;
 pub mod ecus;
@@ -19,7 +19,9 @@ pub use ecus::{
 use std::fs;
 use std::path::Path;
 
-use embrig_core::{Ecu, Simulation};
+use embrig_core::frame::CanFrame;
+use embrig_core::simulation::Simulation;
+use embrig_core::{NetEcu, NetEcuError, NetEcuFactory};
 use thiserror::Error;
 
 /// Errors while assembling a simulation from a vehicle config.
@@ -59,45 +61,18 @@ pub struct BuiltSimulation {
     pub ecus: Vec<(String, usize)>,
 }
 
-/// Creates the [`Ecu`] implementation for a `type: sil` ECU node. Used by
-/// software-in-the-loop tooling so firmware (host-compiled) is the code, not
-/// the config. `step_budget_us` is the wall-clock budget for one simulated
-/// step (the firmware must not exceed it).
-pub trait EcuFactory: Send + Sync {
-    fn create(
-        &self,
-        name: &str,
-        step_budget_us: u64,
-    ) -> Result<Box<dyn Ecu>, embrig_core::EcuError>;
-}
-
 /// A factory registry with no firmware: instantiating any `type: sil` ECU
 /// fails with [`ModelError::NoSilFirmware`].
 #[derive(Default)]
 pub struct NoSils;
 
-impl EcuFactory for NoSils {
+impl NetEcuFactory<CanFrame> for NoSils {
     fn create(
         &self,
         name: &str,
         _step_budget_us: u64,
-    ) -> Result<Box<dyn Ecu>, embrig_core::EcuError> {
-        Err(embrig_core::EcuError::NotRegistered(name.to_string()))
-    }
-}
-
-/// Lets callers register a firmware factory as a plain closure, e.g.
-/// `registry.register("controller", |_name, _budget| Ok(Box::new(Firmware::new())))`.
-impl<F> EcuFactory for F
-where
-    F: Fn(&str, u64) -> Result<Box<dyn Ecu>, embrig_core::EcuError> + Send + Sync + 'static,
-{
-    fn create(
-        &self,
-        name: &str,
-        step_budget_us: u64,
-    ) -> Result<Box<dyn Ecu>, embrig_core::EcuError> {
-        self(name, step_budget_us)
+    ) -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
+        Err(NetEcuError::NotRegistered(name.to_string()))
     }
 }
 
@@ -138,11 +113,11 @@ pub fn build_simulation_indexed(
 }
 
 /// Like [`build_simulation_indexed`] but lets callers provide the firmware
-/// factories for `type: sil` ECU nodes (see [`EcuFactory`]).
+/// factories for `type: sil` ECU nodes (see [`embrig_core::NetEcuFactory`]).
 pub fn build_simulation_indexed_with(
     config: &VehicleConfig,
     dbc_path: &Path,
-    factories: impl EcuFactory,
+    factories: impl NetEcuFactory<CanFrame>,
 ) -> Result<BuiltSimulation, ModelError> {
     let text = fs::read_to_string(dbc_path).map_err(|source| ModelError::ReadDbc {
         path: dbc_path.display().to_string(),
@@ -303,6 +278,7 @@ pub fn build_simulation_indexed_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use embrig_core::network::CanSimExt;
     use embrig_core::time::US_PER_MS;
     use std::io::Write;
 
@@ -396,7 +372,7 @@ period_us: 50000
         let counts = sim.frame_counts();
         assert!(counts.iter().any(|(id, _)| *id == ecus::ID_BATTERY));
         assert!(counts.iter().any(|(id, _)| *id == ecus::ID_MOTOR_STATUS));
-        let frame = sim.recorder().last_frame(ecus::ID_MOTOR_ENABLE).unwrap();
+        let frame = sim.recorder().last_message(&ecus::ID_MOTOR_ENABLE).unwrap();
         let enable = embrig_dbc::parse(DBC)
             .unwrap()
             .message(ecus::ID_MOTOR_ENABLE)

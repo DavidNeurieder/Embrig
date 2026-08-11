@@ -17,7 +17,7 @@
 
 use embrig_core::frame::CanFrame;
 use embrig_core::time::{ms, Timestamp};
-use embrig_core::{Ecu, EcuError};
+use embrig_core::{EcuError, NetEcu};
 use embrig_dbc::MessageDef;
 
 /// Message ids from the powertrain DBC.
@@ -89,7 +89,7 @@ impl Charger {
     }
 }
 
-impl Ecu for Charger {
+impl NetEcu<CanFrame> for Charger {
     fn name(&self) -> &str {
         &self.name
     }
@@ -200,7 +200,7 @@ impl VehicleController {
     }
 }
 
-impl Ecu for VehicleController {
+impl NetEcu<CanFrame> for VehicleController {
     fn name(&self) -> &str {
         &self.name
     }
@@ -308,7 +308,7 @@ impl Motor {
     }
 }
 
-impl Ecu for Motor {
+impl NetEcu<CanFrame> for Motor {
     fn name(&self) -> &str {
         &self.name
     }
@@ -468,7 +468,7 @@ mod tests {
     }
 
     fn last_symbol(sim: &Simulation, id: u32, signal: &str) -> Option<String> {
-        let frame = sim.recorder().last_frame(id)?;
+        let frame = sim.recorder().last_message(&id)?;
         let network = embrig_dbc::parse(TESTS_DBC).unwrap();
         let m = network.message(id)?;
         let raw = m.decode_signal(&frame.data, signal).ok()?.round() as i64;
@@ -476,7 +476,7 @@ mod tests {
     }
 
     fn motor_enable(sim: &Simulation) -> Option<bool> {
-        let frame = sim.recorder().last_frame(ID_MOTOR_ENABLE)?;
+        let frame = sim.recorder().last_message(&ID_MOTOR_ENABLE)?;
         Some(
             embrig_dbc::parse(TESTS_DBC)
                 .unwrap()

@@ -1,26 +1,21 @@
 //! A deterministic virtual UDP network simulation.
 //!
-//! Mirrors [`embrig_core::simulation::Simulation`] for CAN: all ECUs are
-//! stepped in insertion order every tick, time advances in fixed
-//! integer-microsecond steps, and there is no randomness and no wall clock.
+//! The engine is [`embrig_core::network::NetworkSim`], shared with CAN and
+//! TCP; [`UdpSim`] is a thin UDP-flavoured wrapper: subscriptions are keyed by
+//! the destination [`SocketAddr`], ECUs are [`NetEcu<UdpDatagram>`] and faults
+//! are [`UdpFault`]. All ECUs step in insertion order every tick, time
+//! advances in fixed integer-microsecond steps, and there is no randomness and
+//! no wall clock.
 
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
+use embrig_core::network::{
+    NetAction, NetEcu, NetFault, NetFaultRule, NetRecord, NetRecorder, NetworkSim,
+};
 use embrig_core::signal::SignalValue;
 use embrig_core::time::Timestamp;
 
 use crate::datagram::UdpDatagram;
-use crate::ecu::{UdpEcu, UdpEcuError};
-
-/// What to do with a datagram after fault injection has run.
-#[derive(Debug, Clone, PartialEq)]
-enum Action {
-    Deliver,
-    Drop,
-    Delay(Timestamp),
-    Corrupt { byte: usize, mask: u8 },
-}
 
 /// A fault injected into the simulated network.
 ///
@@ -44,137 +39,70 @@ pub enum UdpFault {
     },
 }
 
-/// A fault rule bound to a time window.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UdpFaultRule {
-    pub fault: UdpFault,
-    pub start: Timestamp,
-    pub duration: Option<Timestamp>,
-}
-
-impl UdpFaultRule {
-    /// Whether the rule is active at `now`.
-    pub fn active_at(&self, now: Timestamp) -> bool {
-        if now < self.start {
-            return false;
+impl NetFault<SocketAddr> for UdpFault {
+    fn matches(&self, key: &SocketAddr) -> bool {
+        match self {
+            UdpFault::Drop { dst } => dst == key,
+            UdpFault::Delay { dst, .. } => dst == key,
+            UdpFault::CorruptByte { dst, .. } => dst == key,
         }
-        match self.duration {
-            None => true,
-            Some(d) => now < self.start + d,
+    }
+
+    fn action(&self) -> NetAction {
+        match self {
+            UdpFault::Drop { .. } => NetAction::Drop,
+            UdpFault::Delay { delay_us, .. } => NetAction::Delay(*delay_us),
+            UdpFault::CorruptByte { byte, mask, .. } => NetAction::Corrupt {
+                byte: *byte,
+                mask: *mask,
+            },
         }
     }
 }
+
+/// A UDP fault rule bound to a time window.
+pub type UdpFaultRule = NetFaultRule<UdpFault>;
 
 /// A recorded item during a network simulation run.
-#[derive(Debug, Clone, PartialEq)]
-pub enum UdpRecord {
-    /// A datagram that was actually delivered on the network.
-    Datagram(UdpDatagram),
-    /// A marker event, e.g. a fault being triggered.
-    Event {
-        ts: Timestamp,
-        source: String,
-        message: String,
-    },
-}
+pub type UdpRecord = NetRecord<UdpDatagram>;
 
-/// Ordered event log for a network simulation run.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct UdpRecorder {
-    pub records: Vec<UdpRecord>,
-}
-
-impl UdpRecorder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, record: UdpRecord) {
-        self.records.push(record);
-    }
-
-    pub fn datagram(&mut self, dg: UdpDatagram) {
-        self.push(UdpRecord::Datagram(dg));
-    }
-
-    pub fn event(&mut self, ts: Timestamp, source: impl Into<String>, message: impl Into<String>) {
-        self.push(UdpRecord::Event {
-            ts,
-            source: source.into(),
-            message: message.into(),
-        });
-    }
-
-    /// All datagrams, in order, from most recent to least recent.
-    pub fn datagrams(&self) -> Vec<&UdpDatagram> {
-        self.records
-            .iter()
-            .rev()
-            .filter_map(|r| match r {
-                UdpRecord::Datagram(d) => Some(d),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// The most recent datagram delivered to `dst`, if any.
-    pub fn last_datagram(&self, dst: SocketAddr) -> Option<&UdpDatagram> {
-        self.records.iter().rev().find_map(|r| match r {
-            UdpRecord::Datagram(d) if d.dst == dst => Some(d),
-            _ => None,
-        })
-    }
-}
+/// Ordered event log for a UDP network simulation run.
+pub type UdpRecorder = NetRecorder<UdpDatagram>;
 
 /// A deterministic virtual UDP network simulation.
+///
+/// Thin wrapper over [`NetworkSim`] keyed by destination endpoint, exposing
+/// the UDP-flavoured API (`attach` with a single address, `last_datagram`).
 pub struct UdpSim {
-    time: Timestamp,
-    step_us: Timestamp,
-    ecus: Vec<Box<dyn UdpEcu>>,
-    /// dst endpoint -> indices of subscribed ECUs.
-    subscriptions: BTreeMap<SocketAddr, Vec<usize>>,
-    outbound: Vec<UdpDatagram>,
-    delayed: Vec<(Timestamp, UdpDatagram)>,
-    recorder: UdpRecorder,
-    faults: Vec<UdpFaultRule>,
+    inner: NetworkSim<SocketAddr, UdpDatagram, UdpFault>,
 }
 
 impl UdpSim {
     pub fn new(step_us: Timestamp) -> Self {
         Self {
-            time: 0,
-            step_us,
-            ecus: Vec::new(),
-            subscriptions: BTreeMap::new(),
-            outbound: Vec::new(),
-            delayed: Vec::new(),
-            recorder: UdpRecorder::new(),
-            faults: Vec::new(),
+            inner: NetworkSim::new(step_us),
         }
     }
 
     pub fn time(&self) -> Timestamp {
-        self.time
+        self.inner.time()
     }
 
     pub fn recorder(&self) -> &UdpRecorder {
-        &self.recorder
+        self.inner.recorder()
     }
 
     pub fn recorder_mut(&mut self) -> &mut UdpRecorder {
-        &mut self.recorder
+        self.inner.recorder_mut()
     }
 
     /// Add an ECU. Datagrams addressed to `address` are delivered to it.
-    pub fn attach(&mut self, ecu: Box<dyn UdpEcu>, address: SocketAddr) -> usize {
-        let index = self.ecus.len();
-        self.subscriptions.entry(address).or_default().push(index);
-        self.ecus.push(ecu);
-        index
+    pub fn attach(&mut self, ecu: Box<dyn NetEcu<UdpDatagram>>, address: SocketAddr) -> usize {
+        self.inner.attach1(ecu, address)
     }
 
     pub fn add_fault(&mut self, rule: UdpFaultRule) {
-        self.faults.push(rule);
+        self.inner.add_fault(rule);
     }
 
     pub fn set_field(
@@ -183,124 +111,38 @@ impl UdpSim {
         message: &str,
         field: &str,
         value: SignalValue,
-    ) -> Result<(), UdpEcuError> {
-        self.ecus[ecu_index].set_field(message, field, value)
+    ) -> Result<(), embrig_core::network::NetEcuError> {
+        self.inner.set_field(ecu_index, message, field, value)
+    }
+
+    /// The most recent datagram delivered to `dst`, if any.
+    pub fn last_datagram(&self, dst: SocketAddr) -> Option<&UdpDatagram> {
+        self.inner.recorder().last_message(&dst)
     }
 
     /// Inject a datagram into the network as if an external node sent it.
-    pub fn inject(&mut self, mut dg: UdpDatagram) {
-        dg.ts = self.time;
-        self.recorder.datagram(dg.clone());
-        self.deliver(&dg);
+    pub fn inject(&mut self, dg: UdpDatagram) {
+        self.inner.inject(dg);
     }
 
     /// Advance the simulation by one tick.
     pub fn step(&mut self) {
-        let mut outbound = std::mem::take(&mut self.outbound);
-        for ecu in self.ecus.iter_mut() {
-            ecu.update(self.time, &mut outbound);
-        }
-
-        for dg in outbound {
-            let mut dg = dg;
-            dg.ts = self.time;
-            self.route(dg);
-        }
-
-        // Deliver datagrams whose delay window has elapsed.
-        let mut due: Vec<UdpDatagram> = Vec::new();
-        self.delayed.retain(|(at, d)| {
-            if *at <= self.time {
-                due.push(d.clone());
-                false
-            } else {
-                true
-            }
-        });
-        for dg in due {
-            self.recorder.datagram(dg.clone());
-            self.deliver(&dg);
-        }
-
-        self.time += self.step_us;
+        self.inner.step();
     }
 
     /// Run until `until` (µs) has elapsed.
     pub fn run_until(&mut self, until: Timestamp) {
-        while self.time < until {
-            self.step();
-        }
+        self.inner.run_until(until);
     }
 
     /// Run for `duration` (µs) from the current time.
     pub fn run_for(&mut self, duration: Timestamp) {
-        self.run_until(self.time + duration);
+        self.inner.run_for(duration);
     }
 
     /// Run for a wall-clock-equivalent `duration` given in milliseconds.
     pub fn run_ms(&mut self, ms: u64) {
-        self.run_for(ms * embrig_core::time::US_PER_MS);
-    }
-
-    fn route(&mut self, mut dg: UdpDatagram) {
-        match self.apply_faults(&dg) {
-            Action::Deliver => {
-                self.recorder.datagram(dg.clone());
-                self.deliver(&dg);
-            }
-            Action::Drop => {
-                self.recorder
-                    .event(self.time, "net", format!("dropped datagram for {}", dg.dst));
-            }
-            Action::Delay(delay) => {
-                self.recorder.event(
-                    self.time,
-                    "net",
-                    format!("delayed datagram for {} by {delay}us", dg.dst),
-                );
-                dg.ts += delay;
-                self.delayed.push((self.time + delay, dg));
-            }
-            Action::Corrupt { byte, mask } => {
-                if let Some(b) = dg.payload.get_mut(byte) {
-                    *b ^= mask;
-                }
-                self.recorder.event(
-                    self.time,
-                    "net",
-                    format!("corrupted byte {byte} for {}", dg.dst),
-                );
-                self.recorder.datagram(dg.clone());
-                self.deliver(&dg);
-            }
-        }
-    }
-
-    fn apply_faults(&self, dg: &UdpDatagram) -> Action {
-        for rule in &self.faults {
-            if !rule.active_at(self.time) {
-                continue;
-            }
-            match rule.fault {
-                UdpFault::Drop { dst } if dst == dg.dst => return Action::Drop,
-                UdpFault::Delay { dst, delay_us } if dst == dg.dst => {
-                    return Action::Delay(delay_us)
-                }
-                UdpFault::CorruptByte { dst, byte, mask } if dst == dg.dst => {
-                    return Action::Corrupt { byte, mask }
-                }
-                _ => {}
-            }
-        }
-        Action::Deliver
-    }
-
-    fn deliver(&mut self, dg: &UdpDatagram) {
-        if let Some(indices) = self.subscriptions.get(&dg.dst) {
-            for &i in indices {
-                self.ecus[i].on_datagram(dg, self.time);
-            }
-        }
+        self.inner.run_ms(ms);
     }
 }
 
@@ -318,7 +160,7 @@ mod tests {
         next: Timestamp,
     }
 
-    impl UdpEcu for PeriodicSender {
+    impl NetEcu<UdpDatagram> for PeriodicSender {
         fn name(&self) -> &str {
             self.name
         }
@@ -339,11 +181,11 @@ mod tests {
         emitted: u32,
     }
 
-    impl UdpEcu for EchoOnUpdate {
+    impl NetEcu<UdpDatagram> for EchoOnUpdate {
         fn name(&self) -> &str {
             "echo"
         }
-        fn on_datagram(&mut self, dg: &UdpDatagram, _time: Timestamp) {
+        fn on_message(&mut self, dg: &UdpDatagram, _time: Timestamp) {
             if dg.dst == self.listen {
                 self.seen += 1;
             }
@@ -389,7 +231,7 @@ mod tests {
         sim.run_ms(110);
         let count = sim
             .recorder()
-            .datagrams()
+            .messages()
             .iter()
             .filter(|d| d.dst == b)
             .count();
@@ -397,7 +239,7 @@ mod tests {
         // so 11 echoes also land within the run window.
         let echo_count = sim
             .recorder()
-            .datagrams()
+            .messages()
             .iter()
             .filter(|d| d.dst == _a)
             .count();
@@ -411,11 +253,11 @@ mod tests {
         let c: SocketAddr = "10.0.0.3:5000".parse().unwrap();
         sim.inject(UdpDatagram::new(a, c, vec![1, 2, 3]));
         sim.step();
-        assert!(sim.recorder().last_datagram(c).is_some());
+        assert!(sim.last_datagram(c).is_some());
         // No ECU subscribes to c, so no echo is produced for it.
         let echoed = sim
             .recorder()
-            .datagrams()
+            .messages()
             .iter()
             .filter(|d| d.dst == a)
             .count();
@@ -443,7 +285,7 @@ mod tests {
         // Produced at t=0,10,20,30,40. Dropped during [20,40): t=20,30.
         let count = sim
             .recorder()
-            .datagrams()
+            .messages()
             .iter()
             .filter(|d| d.dst == b)
             .count();
@@ -473,7 +315,7 @@ mod tests {
         sim.run_ms(30);
         let dgs: Vec<Timestamp> = sim
             .recorder()
-            .datagrams()
+            .messages()
             .iter()
             .filter(|d| d.dst == b)
             .map(|d| d.ts)
@@ -487,6 +329,6 @@ mod tests {
     fn injection_is_recorded_and_delivered() {
         let (mut sim, a, b) = net();
         sim.inject(UdpDatagram::new(a, b, vec![1, 2, 3, 4, 5, 6, 7, 8]));
-        assert!(sim.recorder().last_datagram(b).is_some());
+        assert!(sim.last_datagram(b).is_some());
     }
 }
