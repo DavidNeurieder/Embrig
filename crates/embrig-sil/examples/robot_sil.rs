@@ -2,16 +2,49 @@
 //! firmware of a differential-drive rover against the Embrig virtual bus,
 //! driven by the exact same YAML suites used for virtual ECUs and hardware.
 //!
+//! ## The embedded code
+//!
+//! `RobotFirmware` below is the code under test — a stand-in for the rover's
+//! motion-controller firmware. It implements the [`NetEcu`] trait:
+//!
+//! * `on_message` — decodes the joystick speed/steer command on `0x100` and
+//!   the e-stop state on `0x110`.
+//! * `update` — picks a state with `behaviour()` (priority: e-stop →
+//!   over-speed fault → idle → drive), clamps wheel speeds, and transmits the
+//!   wheel-speed command on `0x200` and the status word on `0x300` every 50 ms.
+//!
+//! This is the only part that is "the device"; everything else in this file is
+//! host test harness.
+//!
+//! ## The host harness
+//!
+//! `main` is test infrastructure, not embedded code: it loads
+//! `robot/vehicle.yaml` + `robot/robot.dbc`, binds the `motion` node to a
+//! fresh `RobotFirmware` through a [`SilRegistry`], and runs the YAML suites in
+//! `robot/suites` with [`sil_run`]. The firmware factory is re-invoked before
+//! every test, so firmware state never leaks between tests.
+//!
+//! ## Supporting files
+//!
+//! * `robot/vehicle.yaml` — the `joystick` and `e-stop` config nodes (stimulus
+//!   sources, overridden by `set_signal`) plus the `motion` node with
+//!   `type: sil` (firmware is code, not config).
+//! * `robot/robot.dbc` — the message map: `DriveCommand` (`0x100`), `EStop`
+//!   (`0x110`), `MotorCommand` (`0x200`) and `RobotStatus` (`0x300`).
+//! * `robot/suites/` — the four tests: drive on joystick command, e-stop
+//!   halt, e-stop-release resume, over-speed refusal.
+//! * `robot/suites_hil/` — send-based HIL twins of the same scenarios, for a
+//!   real rover on a real CAN bus.
+//!
+//! ## How to run
+//!
 //! ```text
 //! cargo run --example robot_sil --package embrig-sil
 //! ```
 //!
-//! `robot/vehicle.yaml` declares two config nodes — `joystick`
-//! (`DriveCommand`) and `e-stop` (`EStop`) — plus a `motion` node with
-//! `type: sil`. The firmware for `motion` is a plain [`NetEcu`] implementation
-//! in this file, registered by name. The suites exercise the rover's
-//! fail-safes: drive on command, e-stop halts, e-stop release resumes, and
-//! commands above the speed limit are refused.
+//! → `4 passed, 0 failed`. Each simulated firmware step runs under a wall-clock
+//! budget (default 100 ms, `step_budget_us` in YAML); an overrun fails the test
+//! instead of hanging it, and `set_signal` on the firmware itself is rejected.
 
 use std::path::Path;
 use std::sync::OnceLock;

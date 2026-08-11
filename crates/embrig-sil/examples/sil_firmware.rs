@@ -2,14 +2,45 @@
 //! against the Embrig virtual bus, driven by the exact same YAML suites used
 //! for the built-in virtual ECUs.
 //!
+//! ## The embedded code
+//!
+//! `ControllerFirmware` below is the code under test — a stand-in for firmware
+//! you would compile for a target board. It implements the [`NetEcu`] trait:
+//!
+//! * `on_message` — receives the temperature reading on `0x100` from the bus.
+//! * `update` — runs the control law (valve open while 10..=90 °C, closed
+//!   otherwise, fail-safe) and transmits `valve_open` on `0x200` every 50 ms.
+//!
+//! This is the only part that is "the device"; everything else in this file is
+//! host test harness.
+//!
+//! ## The host harness
+//!
+//! `main` is test infrastructure, not embedded code: it loads
+//! `fixtures/vehicle.yaml` + `fixtures/controller.dbc`, binds the `controller`
+//! node to a fresh `ControllerFirmware` through a [`SilRegistry`], and runs the
+//! YAML suites with [`sil_run`]. The firmware factory is re-invoked before
+//! every test, so firmware state never leaks between tests.
+//!
+//! ## Supporting files
+//!
+//! * `fixtures/vehicle.yaml` — declares the `sensor` config node (the stimulus
+//!   source, overridden by `set_signal`) and the `controller` node with
+//!   `type: sil` (firmware is code, not config).
+//! * `fixtures/controller.dbc` — the message map: `SensorInput` (`0x100`) and
+//!   `ValveCommand` (`0x200`).
+//! * `suites/nominal.yaml` — a valid temperature keeps the valve open.
+//! * `suites/overrange.yaml` — an over-range temperature closes it.
+//!
+//! ## How to run
+//!
 //! ```text
 //! cargo run --example sil_firmware --package embrig-sil
 //! ```
 //!
-//! `fixtures/vehicle.yaml` declares a `sensor` config node and a
-//! `controller` node with `type: sil`. The firmware for `controller` is a
-//! plain [`NetEcu`] implementation in this file, registered by name. `sil_run`
-//! builds the simulation, runs every suite, and reports pass/fail per test.
+//! → `2 passed, 0 failed`. Each simulated firmware step runs under a wall-clock
+//! budget (default 100 ms, `step_budget_us` in YAML); an overrun fails the test
+//! instead of hanging it, and `set_signal` on the firmware itself is rejected.
 
 use std::path::Path;
 use std::sync::OnceLock;
