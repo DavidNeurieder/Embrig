@@ -76,9 +76,11 @@ interfaces:
   with the `fields:` values (scaled/symbolic values supported) — the Ethernet
   equivalent of a config ECU, no code needed.
 - **`type: udp-sil`** nodes are host-compiled firmware implementing the
-  `UdpEcu` trait (see `crates/embrig-test/src/udp.rs` and the `udp_run_with_firmware`
-  helper); like CAN SIL nodes they are registered by name and cannot be driven
-  by `set_field` — you test them through the network.
+  `NetEcu<UdpDatagram>` trait (the unified ECU interface from
+  `embrig_core::network`, see `crates/embrig-test/src/udp.rs` and the
+  `udp_run_with_firmware` helper); like CAN SIL nodes they are registered by
+  name in a `NetRegistry<UdpDatagram>` and cannot be driven by `set_field` —
+  you test them through the network.
 - **`networks:`** lists the host endpoint (`host`) the test bench binds/addresses
   and the netmap file, relative to `vehicle.yaml`. `host` is the source address
   of injected datagrams and the destination of telemetry.

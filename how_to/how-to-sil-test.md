@@ -7,7 +7,7 @@ board. Once the firmware is wrapped, the identical suites can later run against
 real hardware ([HIL](how-to-hil-test.md)).
 
 This guide assumes your firmware already exists in **Rust**. The only "porting"
-required is wrapping it in the `Ecu` trait so the simulator can step it.
+required is wrapping it in the `NetEcu` trait so the simulator can step it.
 
 ---
 
@@ -86,11 +86,12 @@ interfaces:
 The `name:` of the `type: sil` node is the key you register firmware under —
 keep it in sync with the registry in step 4.
 
-## 3. Wrap your firmware in the `Ecu` trait
+## 3. Wrap your firmware in the `NetEcu` trait
 
-`Ecu` is deliberately small (`crates/embrig-core/src/ecu.rs`): only `name()` is
-mandatory — `update`, `on_message` and `set_signal` all have defaults. You
-implement two callbacks:
+`NetEcu<CanFrame>` is deliberately small (defined in
+`crates/embrig-core/src/network.rs`, re-exported from `embrig_core::ecu`): only
+`name()` is mandatory — `update`, `on_message`, `set_signal` and `set_field`
+all have defaults. You implement two callbacks:
 
 - `on_message(&mut self, frame, time)` — handle a frame whose id is in `listen`.
 - `update(&mut self, time, out)` — advance state, push outgoing frames onto `out`.
@@ -100,9 +101,9 @@ Decode inputs and encode outputs through the parsed DBC network (cache it in a
 
 ```rust
 use std::sync::OnceLock;
-use embrig_core::ecu::{Ecu, EcuError};
 use embrig_core::frame::CanFrame;
 use embrig_core::time::Timestamp;
+use embrig_core::{NetEcu, NetEcuError};
 use embrig_dbc::Network;
 
 const DBC: &str = include_str!("robot/robot.dbc");
@@ -131,7 +132,7 @@ impl MotionFirmware {
     }
 }
 
-impl Ecu for MotionFirmware {
+impl NetEcu<CanFrame> for MotionFirmware {
     fn name(&self) -> &str {
         &self.name
     }
@@ -208,7 +209,8 @@ simulation and a tokio runtime for you:
 
 ```rust
 use std::path::Path;
-use embrig_core::ecu::EcuError;
+use embrig_core::frame::CanFrame;
+use embrig_core::{NetEcu, NetEcuError};
 use embrig_models::load_vehicle_config;
 use embrig_sil::{sil_run, SilRegistry};
 
@@ -220,7 +222,7 @@ fn main() -> anyhow::Result<()> {
     let mut registry = SilRegistry::new();
     registry.register(
         "motion", // must match the `type: sil` node name in vehicle.yaml
-        |name: &str, _budget: u64| -> Result<Box<dyn Ecu>, EcuError> {
+        |name: &str, _budget: u64| -> Result<Box<dyn NetEcu<CanFrame>>, NetEcuError> {
             Ok(Box::new(MotionFirmware::new(name)))
         },
     );
@@ -274,7 +276,7 @@ cargo run --example robot_sil --package embrig-sil
 
 - **Host-compiled Rust only.** Embrig SIL does not run your target binary or
   cross-compiled C/C++ firmware. If your firmware is C/C++, port the control
-  logic into the `Ecu` implementation and review it against the real source —
+  logic into the `NetEcu` implementation and review it against the real source —
   the suites then *prove* the port, and HIL verifies the port against the real
   firmware.
 - **Wall-clock budget, simulated time.** The bus clock is deterministic
