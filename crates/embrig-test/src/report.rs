@@ -36,6 +36,22 @@ impl SuiteResult {
     }
 }
 
+/// Print a suite result to stdout in the standard `PASS`/`FAIL` format.
+pub fn print_suite(suite: &SuiteResult) {
+    for test in &suite.tests {
+        let status = if test.passed { "PASS" } else { "FAIL" };
+        println!(
+            "{status}  {}  ({:.0} ms)",
+            test.name,
+            test.duration_us as f64 / 1000.0
+        );
+        for failure in &test.failures {
+            println!("       {failure}");
+        }
+    }
+    println!("{} passed, {} failed", suite.passed(), suite.failed());
+}
+
 /// Serialize a suite result as pretty JSON.
 pub fn json(suite: &SuiteResult) -> String {
     serde_json::to_string_pretty(suite).unwrap_or_else(|e| e.to_string())

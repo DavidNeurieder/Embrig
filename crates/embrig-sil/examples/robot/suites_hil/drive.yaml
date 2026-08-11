@@ -1,0 +1,12 @@
+# HIL twin of suites/drive.yaml: same scenario, but the stimulus is an explicit
+# `send` frame instead of a `set_signal` override. On real hardware the
+# joystick node does not exist — you inject the raw DriveCommand bytes yourself
+# (speed 0.8 m/s = 0.01 scale -> raw 80 = 0x50, little-endian).
+name: joystick_command_drives_the_rover
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - send: { id: 0x100, data: [0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] }
+  - expect: { id: 0x200, signal: left_speed, equals: 0.8, within: 1s }
+  - expect: { id: 0x200, signal: right_speed, equals: 0.8, within: 1s }
+  - expect: { id: 0x300, signal: state, equals: "DRIVING", within: 1s }

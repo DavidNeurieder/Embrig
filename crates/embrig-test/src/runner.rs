@@ -65,6 +65,21 @@ pub async fn run_suite<T: TestTarget + ?Sized>(
     })
 }
 
+/// The bundled loopback smoke test: send one frame and expect it back on the
+/// same bus (own-message reception). Mirrors `scripts/loopback.yaml`.
+pub const LOOPBACK_YAML: &str = "name: bus_loopback\ntimeout: 5s\nsteps:\n  - send: { id: 0x7FF, data: [1, 2, 3, 4, 5, 6, 7, 8] }\n  - expect: { id: 0x7FF, present: true, within: 500ms }\n";
+
+/// Run the bundled loopback smoke test against a target.
+///
+/// Used by the CLI `--check` flag to prove the interface round trip before
+/// running a real suite. The target is reset first.
+pub async fn run_loopback<T: TestTarget + ?Sized>(target: &mut T) -> Result<TestResult, TestError> {
+    let spec = crate::dsl::load_spec_str(LOOPBACK_YAML)
+        .expect("the bundled loopback spec must parse and validate");
+    target.reset()?;
+    run_spec(&spec, target).await
+}
+
 /// Run one test spec against a target. Assertion failures are recorded inside
 /// the returned [`TestResult`]; infrastructure errors abort the test.
 pub async fn run_spec<T: TestTarget + ?Sized>(

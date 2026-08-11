@@ -13,18 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IFACE="${VCAN_IFACE:-vcan0}"
 
-if [[ "$(id -u)" != "0" ]] && ! command -v sudo >/dev/null 2>&1; then
-    echo "error: need root (or sudo) to configure ${IFACE}" >&2
-    exit 1
-fi
-
-echo "==> loading vcan kernel module"
-sudo modprobe vcan || true
-
-echo "==> creating ${IFACE}"
-sudo ip link del dev "${IFACE}" 2>/dev/null || true
-sudo ip link add dev "${IFACE}" type vcan
-sudo ip link set up "${IFACE}"
+"${ROOT}/scripts/vcan-up.sh"
 
 echo "==> building with socketcan feature"
 cargo build -q --workspace --features socketcan --manifest-path "${ROOT}/Cargo.toml"

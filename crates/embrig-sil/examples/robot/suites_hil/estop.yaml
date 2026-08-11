@@ -1,0 +1,11 @@
+# HIL twin of suites/estop.yaml: press the e-stop (0x110 estop=1) while
+# commanding speed 1.0 (raw 100 = 0x64) and expect the rover to halt.
+name: estop_stops_the_moving_rover
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - send: { id: 0x100, data: [0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] }
+  - expect: { id: 0x300, signal: state, equals: "DRIVING", within: 1s }
+  - send: { id: 0x110, data: [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] }
+  - expect: { id: 0x300, signal: state, equals: "ESTOP", within: 1s }
+  - expect: { id: 0x200, signal: left_speed, equals: 0.0, within: 1s }

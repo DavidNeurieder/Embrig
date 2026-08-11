@@ -62,9 +62,8 @@ If you only want to prove the SocketCAN path end to end (not the ECU), a virtual
 interface works:
 
 ```sh
-sudo modprobe vcan
-sudo ip link add dev vcan0 type vcan
-sudo ip link set up vcan0
+sudo scripts/vcan-up.sh      # creates and brings up vcan0 (idempotent)
+sudo scripts/vcan-down.sh    # tear it down again
 ```
 
 This is a loopback check, not a HIL test — run `scripts/vcan-smoke.sh` to see it
@@ -145,7 +144,15 @@ loopback test — it sends one frame and expects it back on the same socket
 embrig test examples/ev-powertrain/vehicle.yaml scripts/loopback.yaml --interface can0
 ```
 
-→ `1 passed, 0 failed` means send→receive works on the interface.
+or run it as a pre-flight before a real suite — `--check` runs the same loopback
+and aborts with a non-zero exit if the round trip fails:
+
+```sh
+embrig test my-project/vehicle.yaml --interface can0 --check
+```
+
+→ `1 passed, 0 failed` (or `CHECK bus loopback ... PASS`) means send→receive
+works on the interface.
 
 ## 6. Run the suite against the ECU
 
@@ -169,11 +176,17 @@ cargo run --example can_hil --package embrig-test --features socketcan
 ```
 
 It defaults to the `ev-powertrain` fixture on the first `socketcan` interface in
-`vehicle.yaml` (or `vcan0`); pass `INTERFACE VEHICLE [TEST...]` to override:
+`vehicle.yaml` (or `vcan0`) and runs the bundled loopback spec — virtual-only
+suites (`set_signal`, faults, config nodes) do not run on hardware. Pass
+`INTERFACE VEHICLE [TEST...]` to override; point `TEST` at your own send-based
+suites:
 
 ```sh
 cargo run --example can_hil --package embrig-test --features socketcan -- can0 my-project/vehicle.yaml tests/
 ```
+
+`--interface` also accepts a raw kernel interface name that is not declared in
+`vehicle.yaml` — it is used directly as the SocketCAN device.
 
 Results go to stdout (`PASS`/`FAIL` per test, then totals) and the exit code is
 non-zero on any failure. For a report:
@@ -182,6 +195,34 @@ non-zero on any failure. For a report:
 embrig test my-project/vehicle.yaml --interface can0 --report report.html
 embrig test my-project/vehicle.yaml --interface can0 --report report.json --report-format json
 ```
+
+## 6b. Converting a SIL suite to HIL
+
+SIL and HIL share the same `expect` assertions; the only mechanical change is
+replacing config-node stimulus with explicit `send` frames (real hardware has no
+config nodes transmitting for you). For each virtual-only step:
+
+| Virtual / SIL step            | HIL replacement                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------- |
+| `set_signal` on a config node | `send` the pre-encoded raw frame; re-send whenever the value must change        |
+| config-node periodic frames   | drop — nothing transmits on its own; your `send` steps are the stimulus         |
+| `fault` injection             | drop — no virtual router; inject faults in firmware or in the harness instead   |
+| `expect`                      | unchanged                                                                        |
+| `wait`                        | unchanged                                                                        |
+
+To encode a signal to raw bytes without doing the math by hand, run the same
+scenario in the virtual simulation and read the frames it emits:
+
+```sh
+embrig simulate my-project/vehicle.yaml --duration 2s --verbose
+```
+
+The bundled rover example ships send-based HIL twins of its SIL suites in
+`crates/embrig-sil/examples/robot/suites_hil/` — compare a twin against its
+original in `suites/` to see the transform applied. Note that a SIL harness may
+have config nodes fighting injected frames on the same ids (the twins' `resume`
+case is one example); on real hardware nothing else transmits, so the `send`
+stimulus persists.
 
 ## 7. What is different from virtual/SIL mode
 

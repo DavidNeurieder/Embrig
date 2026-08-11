@@ -1,7 +1,7 @@
 //! The YAML test DSL: parsing and validation of test files.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use embrig_core::time::{Timestamp, US_PER_MS, US_PER_S};
 use serde::{Deserialize, Serialize};
@@ -318,8 +318,19 @@ pub fn load_spec(path: &Path) -> Result<TestSpec, DslError> {
         path: path.display().to_string(),
         message: e.to_string(),
     })?;
-    let spec: TestSpec = serde_saphyr::from_str(&text).map_err(|e| DslError::Load {
-        path: path.display().to_string(),
+    load_spec_str(&text).map_err(|e| match e {
+        DslError::Load { path: _, message } => DslError::Load {
+            path: path.display().to_string(),
+            message,
+        },
+        other => other,
+    })
+}
+
+/// Parse and validate a test spec from an in-memory YAML string.
+pub fn load_spec_str(text: &str) -> Result<TestSpec, DslError> {
+    let spec: TestSpec = serde_saphyr::from_str(text).map_err(|e| DslError::Load {
+        path: "<string>".into(),
         message: e.to_string(),
     })?;
     for step in &spec.steps {
@@ -404,6 +415,19 @@ pub fn load_spec(path: &Path) -> Result<TestSpec, DslError> {
         }
     }
     Ok(spec)
+}
+
+/// All `*.yaml`/`*.yml` files inside a directory, sorted.
+pub fn collect_suites(dir: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+        })
+        .collect();
+    files.sort();
+    Ok(files)
 }
 
 #[cfg(test)]

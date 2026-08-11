@@ -23,6 +23,7 @@ pub async fn run(cli: Cli) -> Result<i32> {
             vehicle,
             tests,
             interface,
+            check,
             report,
             report_format,
         } => {
@@ -30,6 +31,7 @@ pub async fn run(cli: Cli) -> Result<i32> {
                 &vehicle,
                 &tests,
                 interface.as_deref(),
+                check,
                 report.as_deref(),
                 &report_format,
             )
@@ -128,6 +130,7 @@ async fn cmd_test(
     vehicle: &Path,
     test_inputs: &[PathBuf],
     interface: Option<&str>,
+    check: bool,
     report: Option<&Path>,
     report_format: &str,
 ) -> Result<i32> {
@@ -152,7 +155,7 @@ async fn cmd_test(
                 default_dir.display()
             );
         }
-        read_yaml_files(&default_dir)?
+        embrig_test::collect_suites(&default_dir)?
     } else {
         resolve_test_files(test_inputs, &vehicle_dir)?
     };
@@ -178,8 +181,23 @@ async fn cmd_test(
         .build(&kind, &input)
         .with_context(|| format!("cannot build `{kind}` target"))?;
 
+    if check {
+        let result = embrig_test::run_loopback(&mut *target).await?;
+        let iface = interface.unwrap_or("virtual");
+        if result.passed {
+            println!("CHECK  bus loopback on `{iface}`  PASS");
+        } else {
+            println!("CHECK  bus loopback on `{iface}`  FAIL");
+            for failure in &result.failures {
+                println!("       {failure}");
+            }
+            eprintln!("aborting: bus loopback failed; fix the interface and re-run");
+            return Ok(1);
+        }
+    }
+
     let suite = embrig_test::run_suite(&mut *target, &files, &label).await?;
-    print_suite(&suite);
+    embrig_test::print_suite(&suite);
 
     if let Some(report_path) = report {
         embrig_test::write_report(report_path, &suite, report_format)
@@ -191,15 +209,18 @@ async fn cmd_test(
 }
 
 /// Resolve the interface kind from the CLI flag (or the virtual default).
+///
+/// A declared `interfaces` name yields its configured kind; anything else is
+/// treated as a raw kernel CAN interface (kind `socketcan`).
 fn interface_kind(config: &VehicleConfig, interface: Option<&str>) -> Result<String> {
     match interface {
         None => Ok("virtual".to_string()),
-        Some(name) => config
+        Some(name) => Ok(config
             .interfaces
             .iter()
             .find(|i| i.name == name)
             .map(|i| i.kind.clone())
-            .ok_or_else(|| anyhow::anyhow!("interface `{name}` not found in vehicle.yaml")),
+            .unwrap_or_else(|| "socketcan".to_string())),
     }
 }
 
@@ -236,7 +257,7 @@ fn resolve_test_files(inputs: &[PathBuf], vehicle_dir: &Path) -> Result<Vec<Path
             );
         };
         if path.is_dir() {
-            out.extend(read_yaml_files(&path)?);
+            out.extend(embrig_test::collect_suites(&path)?);
         } else {
             out.push(path);
         }
@@ -247,33 +268,4 @@ fn resolve_test_files(inputs: &[PathBuf], vehicle_dir: &Path) -> Result<Vec<Path
         bail!("no test files found");
     }
     Ok(out)
-}
-
-/// All `*.yaml`/`*.yml` files inside a directory, sorted.
-fn read_yaml_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut files: Vec<PathBuf> = fs::read_dir(dir)
-        .with_context(|| format!("cannot read `{}`", dir.display()))?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext == "yaml" || ext == "yml")
-        })
-        .collect();
-    files.sort();
-    Ok(files)
-}
-
-fn print_suite(suite: &embrig_test::SuiteResult) {
-    for test in &suite.tests {
-        let status = if test.passed { "PASS" } else { "FAIL" };
-        println!(
-            "{status}  {}  ({:.0} ms)",
-            test.name,
-            test.duration_us as f64 / 1000.0
-        );
-        for failure in &test.failures {
-            println!("       {failure}");
-        }
-    }
-    println!("{} passed, {} failed", suite.passed(), suite.failed());
 }

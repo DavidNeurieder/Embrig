@@ -6,7 +6,7 @@
 //! and faults are rejected — there is no software router in the loop.
 //!
 //! ```text
-//! # vcan0, no arguments needed
+//! # vcan0, no arguments needed (runs the loopback smoke test)
 //! cargo run --example can_hil --package embrig-test --features socketcan
 //!
 //! # a specific interface / vehicle / tests
@@ -17,12 +17,14 @@
 //! Arguments (all optional): `INTERFACE VEHICLE [TEST...]`. The interface is
 //! the *name* declared in `vehicle.yaml` (defaults to its first `socketcan`
 //! interface). Without a vehicle it uses the `ev-powertrain` fixture; without
-//! tests it uses the `tests/` directory next to the vehicle.
+//! tests it uses the bundled loopback spec — send `0x7FF`, expect it back —
+//! because virtual-only suites (`set_signal`, faults, config nodes) do not run
+//! on hardware. Pass your own send-based suites to exercise a real ECU.
 //!
 //! Bring up a loopback-capable virtual bus first:
 //!
 //! ```text
-//! sudo modprobe vcan && sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+//! sudo scripts/vcan-up.sh
 //! ```
 
 #[cfg(feature = "socketcan")]
@@ -57,8 +59,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let test_inputs: Vec<String> = args.iter().skip(2).cloned().collect();
+    let loopback = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/loopback.yaml");
     let tests = if test_inputs.is_empty() {
-        yaml_files(&vehicle_dir.join("tests"))?
+        vec![loopback]
     } else {
         let mut out = Vec::new();
         for input in &test_inputs {
@@ -68,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vehicle_dir.join(input)
             };
             if path.is_dir() {
-                out.extend(yaml_files(&path)?);
+                out.extend(embrig_test::collect_suites(&path)?);
             } else {
                 out.push(path);
             }
@@ -92,11 +95,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         interface: Some(&interface),
     };
     let registry = ProtocolRegistry::default();
-    let mut target = registry.build("socketcan", &input)?;
+    let mut target = match registry.build("socketcan", &input) {
+        Ok(target) => target,
+        Err(e) => {
+            return Err(format!(
+                "cannot open CAN interface `{interface}`: {e}\n\
+                 create a virtual bus with `sudo scripts/vcan-up.sh`, or pass a \
+                 real interface name (`can_hil <iface> [vehicle] [tests...]`)"
+            )
+            .into())
+        }
+    };
 
     let suite =
         embrig_test::run_suite(&mut *target, &tests, &vehicle.display().to_string()).await?;
-    print_suite(&suite);
+    embrig_test::print_suite(&suite);
     if suite.failed() > 0 {
         std::process::exit(1);
     }
@@ -108,31 +121,4 @@ fn main() {
     eprintln!("this example needs the `socketcan` feature:");
     eprintln!("  cargo run --example can_hil --package embrig-test --features socketcan");
     std::process::exit(2);
-}
-
-/// All `*.yaml`/`*.yml` files inside a directory, sorted.
-#[cfg(feature = "socketcan")]
-fn yaml_files(dir: &std::path::Path) -> Result<Vec<PathBuf>, std::io::Error> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext == "yaml" || ext == "yml")
-        })
-        .collect();
-    files.sort();
-    Ok(files)
-}
-
-#[cfg(feature = "socketcan")]
-fn print_suite(suite: &embrig_test::SuiteResult) {
-    for test in &suite.tests {
-        let status = if test.passed { "PASS" } else { "FAIL" };
-        println!("  [{status}] {} ({} steps)", test.name, test.steps);
-        for failure in &test.failures {
-            println!("      {failure}");
-        }
-    }
-    let failed = suite.failed();
-    println!("{} passed, {failed} failed", suite.passed());
 }

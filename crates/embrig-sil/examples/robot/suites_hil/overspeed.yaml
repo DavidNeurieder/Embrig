@@ -1,0 +1,9 @@
+# HIL twin of suites/overspeed.yaml: command 5.0 m/s (raw 500 = 0x01F4,
+# little-endian) and expect the over-speed fail-safe to engage.
+name: overspeed_command_is_refused
+timeout: 5s
+steps:
+  - wait: { time: 300ms }
+  - send: { id: 0x100, data: [0xF4, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] }
+  - expect: { id: 0x300, signal: state, equals: "FAULT", within: 1s }
+  - expect: { id: 0x200, signal: left_speed, equals: 0.0, within: 1s }

@@ -207,7 +207,27 @@ fn test_with_explicit_file_list() {
 }
 
 #[test]
-fn test_rejects_unknown_interface_name() {
+fn test_check_runs_loopback_preflight_on_virtual() {
+    let dir = tmpdir("check");
+    run(&["init", dir.to_str().unwrap()]);
+    let out = run(&[
+        "test",
+        dir.join("vehicle.yaml").to_str().unwrap(),
+        "--check",
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(
+        stdout.contains("CHECK  bus loopback on `virtual`  PASS"),
+        "got: {stdout}"
+    );
+    assert!(stdout.contains("5 passed"), "got: {stdout}");
+}
+
+#[test]
+fn test_unknown_interface_name_is_treated_as_raw_can_iface() {
+    // An interface name not declared in vehicle.yaml falls back to a raw
+    // SocketCAN interface; without the `socketcan` feature the CLI must say so.
     let dir = tmpdir("iface");
     run(&["init", dir.to_str().unwrap()]);
     let out = run(&[
@@ -217,7 +237,11 @@ fn test_rejects_unknown_interface_name() {
         "can9",
     ]);
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
-    assert!(stderr(&out).contains("not found in vehicle.yaml"));
+    assert!(
+        stderr(&out).contains("socketcan"),
+        "stderr: {}",
+        stderr(&out)
+    );
 }
 
 #[test]

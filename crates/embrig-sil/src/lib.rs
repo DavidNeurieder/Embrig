@@ -250,6 +250,20 @@ pub fn sil_run(
     })
 }
 
+/// Run every `*.yaml`/`*.yml` file in `dir` against the firmware in `registry`.
+///
+/// The directory form mirrors how the CLI and HIL targets select suites, so a
+/// SIL run can point at the same `suites/` layout without listing files.
+pub fn sil_run_dir(
+    config: &VehicleConfig,
+    dbc_path: &Path,
+    registry: SilRegistry,
+    dir: &Path,
+) -> Result<SuiteResult, SilError> {
+    let files = embrig_test::collect_suites(dir)?;
+    sil_run(config, dbc_path, registry, &files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

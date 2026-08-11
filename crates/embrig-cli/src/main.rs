@@ -55,9 +55,12 @@ enum Command {
         /// Test files or directories (defaults to `tests` next to vehicle.yaml).
         #[arg(value_name = "TESTS", num_args = 0..)]
         tests: Vec<PathBuf>,
-        /// Interface name from vehicle.yaml (`virtual` or `socketcan`).
+        /// Interface name from vehicle.yaml, or a raw CAN interface name.
         #[arg(long)]
         interface: Option<String>,
+        /// Run a loopback check on the interface before the suites.
+        #[arg(long)]
+        check: bool,
         /// Write a report file (format from --report-format).
         #[arg(long, value_name = "PATH")]
         report: Option<PathBuf>,

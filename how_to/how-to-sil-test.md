@@ -212,7 +212,7 @@ use std::path::Path;
 use embrig_core::frame::CanFrame;
 use embrig_core::{NetEcu, NetEcuError};
 use embrig_models::load_vehicle_config;
-use embrig_sil::{sil_run, SilRegistry};
+use embrig_sil::{sil_run, sil_run_dir, SilRegistry};
 
 fn main() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/robot");
@@ -244,6 +244,13 @@ fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
+```
+
+Or point at a whole `suites/` directory (like the CLI and HIL do) with
+`sil_run_dir` — the files are collected and run in sorted order for you:
+
+```rust
+let result = sil_run_dir(&config, &dbc, registry, &root.join("suites"))?;
 ```
 
 The factory closure receives `(name, step_budget_us)` and returns a fresh

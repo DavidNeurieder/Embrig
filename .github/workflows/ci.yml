@@ -21,28 +21,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      - name: Check formatting + clippy (all features)
+        run: make check
 
-      - name: Clippy (all features)
-        run: cargo clippy --workspace --all-targets --features socketcan -- -D warnings
-
-      - name: Test workspace
-        run: cargo test --workspace
-
-      - name: Test with socketcan feature
-        run: cargo test --workspace --features socketcan
+      - name: Test workspace (both feature sets)
+        run: make test
 
       - name: End-to-end example
         run: |
           cargo run -q --bin embrig -- test examples/ev-powertrain/vehicle.yaml
 
-      - name: SIL example
+      - name: SIL examples
         run: |
           cargo run -q --example sil_firmware --package embrig-sil
-
-      - name: SIL robotics example
-        run: |
           cargo run -q --example robot_sil --package embrig-sil
 
       - name: UDP rover example
@@ -77,3 +68,9 @@ jobs:
 
       - name: SocketCAN round trip on vcan0
         run: ./scripts/vcan-smoke.sh
+
+      - name: can_hil example on vcan0
+        run: cargo run -q --example can_hil --package embrig-test --features socketcan
+
+      - name: CLI --check pre-flight on vcan0
+        run: cargo run -q --features socketcan --bin embrig -- test examples/ev-powertrain/vehicle.yaml --interface vcan0 --check

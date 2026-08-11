@@ -156,23 +156,12 @@ fn main() -> anyhow::Result<()> {
         },
     );
 
-    let mut suites = Vec::new();
-    for suite in ["drive", "estop", "resume", "overspeed"] {
-        suites.push(root.join("suites").join(format!("{suite}.yaml")));
-    }
+    let suites = embrig_test::collect_suites(&root.join("suites"))?;
     let result = sil_run(&config, &dbc, registry, &suites)?;
 
     println!("SIL robotics suite: {}", result.file);
-    for test in &result.tests {
-        let status = if test.passed { "PASS" } else { "FAIL" };
-        println!("  [{status}] {} ({} steps)", test.name, test.steps);
-        for failure in &test.failures {
-            println!("      {failure}");
-        }
-    }
-    let failed = result.failed();
-    println!("{} passed, {failed} failed", result.tests.len() - failed);
-    if failed > 0 {
+    embrig_test::print_suite(&result);
+    if result.failed() > 0 {
         std::process::exit(1);
     }
     Ok(())

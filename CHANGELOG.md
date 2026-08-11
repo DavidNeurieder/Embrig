@@ -70,6 +70,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `eth_ecus`/`networks`, the UDP steps, real-socket targets), linked from
       the README and the website.
 
+### Added
+
+- **HIL/SIL ergonomics** — one-command DX for the whole stack:
+  - **`crates/embrig-test/examples/can_hil.rs`** — a runnable
+    hardware-in-the-loop example: builds the SocketCAN target via
+    `ProtocolRegistry`, runs YAML suites against a real or `vcan` interface
+    (default: the bundled loopback spec), with a helpful hint pointing at
+    `scripts/vcan-up.sh` when the interface is missing.
+  - **Shared helpers** — `embrig_test::collect_suites`, `load_spec_str`,
+    `print_suite`, `run_loopback` + `LOOPBACK_YAML`, and
+    `embrig_sil::sil_run_dir` (run a whole `suites/` directory); the CLI and
+    all three examples now share them instead of duplicating the code.
+  - **CLI `--interface` fallback** — an interface name not declared in
+    `vehicle.yaml` is treated as a raw kernel CAN interface (no more "not
+    found in vehicle.yaml" dead end).
+  - **CLI `--check` pre-flight** — runs the loopback smoke test on the
+    interface before the real suites and aborts on a failed round trip.
+  - **Scripts** — `scripts/vcan-up.sh` / `scripts/vcan-down.sh` (idempotent
+    virtual-bus bring-up/teardown); `vcan-smoke.sh` now reuses `vcan-up.sh`.
+  - **HIL twin suites** — `crates/embrig-sil/examples/robot/suites_hil/`
+    contains send-based twins of the rover SIL suites; the HIL how-to gains a
+    "Converting a SIL suite to HIL" section.
+  - **`Makefile`** — `make check`/`test`/`examples`/`sil`/`hil`/`vcan-up`/
+    `vcan-down`/`ci`; CI now runs the same `check` and `test` targets and
+    exercises `can_hil` + `--check` on `vcan0`.
+
 ### Changed
 
 - `embrig-test::TargetError` gains `UnsupportedOnSut` and `SutTimeout`.

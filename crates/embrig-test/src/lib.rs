@@ -23,10 +23,13 @@ pub mod runner;
 pub mod target;
 pub mod udp;
 
-pub use dsl::{load_spec, parse_duration, ExpectStep, ExpectedValue, FaultKind, Step, TestSpec};
+pub use dsl::{
+    collect_suites, load_spec, load_spec_str, parse_duration, ExpectStep, ExpectedValue, FaultKind,
+    Step, TestSpec,
+};
 pub use protocol::{Protocol, ProtocolInput, ProtocolRegistry};
-pub use report::{html, json, load_json, write_report, SuiteResult, TestResult};
-pub use runner::{run_spec, run_suite, TestError};
+pub use report::{html, json, load_json, print_suite, write_report, SuiteResult, TestResult};
+pub use runner::{run_loopback, run_spec, run_suite, TestError, LOOPBACK_YAML};
 pub use target::{CanLink, DynTestTarget, NetmapLink, TargetError, TestTarget, VirtualTarget};
 pub use udp::{
     build_udp_simulation, build_udp_simulation_with, udp_run, udp_run_with_firmware, BuiltUdpSim,

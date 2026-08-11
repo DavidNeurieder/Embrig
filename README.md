@@ -161,7 +161,7 @@ Step-by-step walkthroughs for testing an existing embedded system:
 
 - [`how_to/how-to-sil-test.md`](how_to/how-to-sil-test.md) — run your Rust
   firmware as the system under test on the virtual bus: DBC + `vehicle.yaml`,
-  wrapping the firmware in the `Ecu` trait, YAML suites, `SilRegistry` +
+  wrapping the firmware in the `NetEcu` trait, YAML suites, `SilRegistry` +
   `sil_run`.
 - [`how_to/how-to-hil-test.md`](how_to/how-to-hil-test.md) — run the same
   suites against a real ECU on a real CAN bus: SocketCAN build, hardware
@@ -172,6 +172,17 @@ Step-by-step walkthroughs for testing an existing embedded system:
   running against a real socket.
 
 ## Development
+
+```sh
+make check      # fmt + clippy (all features)
+make test       # workspace tests, both feature sets
+make examples   # SIL + UDP example binaries
+make sil        # just the SIL examples
+make hil        # vcan0 up, then the HIL example + CLI loopback (needs sudo)
+make ci         # everything above
+```
+
+Or run the raw commands (`make` is just a thin wrapper):
 
 ```sh
 cargo fmt --all --check
@@ -185,7 +196,10 @@ cargo run --example udp_rover --package embrig-test
 If you have a real or virtual CAN device:
 
 ```sh
-scripts/vcan-smoke.sh     # brings up vcan0 (needs sudo) and runs the socketcan path
+scripts/vcan-up.sh       # creates and brings up vcan0 (needs sudo)
+scripts/vcan-smoke.sh    # brings up vcan0 and runs the socketcan round trip
+scripts/vcan-down.sh     # tears vcan0 down
+cargo run --example can_hil --package embrig-test --features socketcan
 ```
 
 Website: <https://davidneurieder.github.io/embrig/>. See [`CHANGELOG.md`](CHANGELOG.md) for release history.

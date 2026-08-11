@@ -127,17 +127,16 @@ impl Protocol for SocketcanProtocol {
     }
 
     fn build(&self, input: &ProtocolInput<'_>) -> Result<Box<dyn DynTestTarget>, TargetError> {
-        let iface_name = input
-            .interface
-            .and_then(|name| {
-                input
-                    .config
-                    .interfaces
-                    .iter()
-                    .find(|i| i.name == name)
-                    .and_then(|i| i.interface.clone())
-            })
-            .unwrap_or_else(|| "vcan0".to_string());
+        let iface_name = match input.interface {
+            Some(name) => input
+                .config
+                .interfaces
+                .iter()
+                .find(|i| i.name == name)
+                .and_then(|i| i.interface.clone())
+                .unwrap_or_else(|| name.to_string()),
+            None => "vcan0".to_string(),
+        };
         let text = std::fs::read_to_string(input.dbc_path).map_err(|e| {
             TargetError::Build(format!("cannot read `{}`: {e}", input.dbc_path.display()))
         })?;
