@@ -4,23 +4,25 @@
 //!
 //! ## The embedded code
 //!
-//! `ControllerFirmware` below is the code under test — a stand-in for firmware
-//! you would compile for a target board. It implements the [`NetEcu`] trait:
+//! The system under test is [`ControllerFirmware`] — a stand-in for firmware
+//! you would compile for a target board. It is **not** in this file: it lives
+//! in its own crate, `firmware/controller` (`fw-controller`), so it compiles
+//! separately from the test harness (`cargo build -p fw-controller`) and can
+//! be replaced by your real firmware. It implements the [`NetEcu`] trait:
 //!
 //! * `on_message` — receives the temperature reading on `0x100` from the bus.
 //! * `update` — runs the control law (valve open while 10..=90 °C, closed
 //!   otherwise, fail-safe) and transmits `valve_open` on `0x200` every 50 ms.
 //!
-//! This is the only part that is "the device"; everything else in this file is
-//! host test harness.
+//! This file is host test harness only.
 //!
 //! ## The host harness
 //!
-//! `main` is test infrastructure, not embedded code: it loads
-//! `fixtures/vehicle.yaml` + `fixtures/controller.dbc`, binds the `controller`
-//! node to a fresh `ControllerFirmware` through a [`SilRegistry`], and runs the
-//! YAML suites with [`sil_run`]. The firmware factory is re-invoked before
-//! every test, so firmware state never leaks between tests.
+//! `main` loads `fixtures/vehicle.yaml` + `fixtures/controller.dbc`, binds the
+//! `controller` node to a fresh [`ControllerFirmware`] through a
+//! [`SilRegistry`], and runs the YAML suites with [`sil_run`]. The firmware
+//! factory is re-invoked before every test, so firmware state never leaks
+//! between tests.
 //!
 //! ## Supporting files
 //!
@@ -43,74 +45,12 @@
 //! instead of hanging it, and `set_signal` on the firmware itself is rejected.
 
 use std::path::Path;
-use std::sync::OnceLock;
 
 use embrig_core::frame::CanFrame;
-use embrig_core::time::Timestamp;
 use embrig_core::{NetEcu, NetEcuError};
-use embrig_dbc::Network;
 use embrig_models::load_vehicle_config;
 use embrig_sil::{sil_run, SilRegistry};
-
-const DBC: &str = include_str!("fixtures/controller.dbc");
-
-fn network() -> &'static Network {
-    static NETWORK: OnceLock<Network> = OnceLock::new();
-    NETWORK.get_or_init(|| embrig_dbc::parse(DBC).expect("valid controller DBC"))
-}
-
-/// The system under test: opens a valve while the temperature is within
-/// 10..90 °C, closes it otherwise (fail-safe).
-struct ControllerFirmware {
-    name: String,
-    temperature: f64,
-    open: bool,
-    next_tx: Timestamp,
-    period_us: u64,
-}
-
-impl ControllerFirmware {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            temperature: 0.0,
-            open: false,
-            next_tx: 0,
-            period_us: 50_000,
-        }
-    }
-}
-
-impl NetEcu<CanFrame> for ControllerFirmware {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn on_message(&mut self, frame: &CanFrame, _time: Timestamp) {
-        if frame.id == 0x100 {
-            if let Ok(temperature) = network()
-                .message(0x100)
-                .unwrap()
-                .decode_signal(&frame.data, "temperature")
-            {
-                self.temperature = temperature;
-                self.open = (10.0..=90.0).contains(&self.temperature);
-            }
-        }
-    }
-
-    fn update(&mut self, time: Timestamp, out: &mut Vec<CanFrame>) {
-        if time >= self.next_tx {
-            let data = network()
-                .message(0x200)
-                .unwrap()
-                .encode_signals(&[("valve_open", if self.open { 1.0 } else { 0.0 })])
-                .expect("valve_open encodes");
-            out.push(CanFrame::new(0x200, data).expect("8-byte frame"));
-            self.next_tx = time + self.period_us;
-        }
-    }
-}
+use fw_controller::ControllerFirmware;
 
 fn main() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");

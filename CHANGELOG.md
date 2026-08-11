@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crates renamed `openhil-*` → `embrig-*`, the binary is `embrig`, and the
   repository/website URLs now use `embrig`. `MVP_PLAN*.md` remain as historical
   artifacts.
+- **SIL firmware split into its own crates** — the embedded code of the SIL
+  demos moved out of the example files into dedicated workspace crates
+  (`firmware/controller` → `fw-controller`, `firmware/robot` → `fw-robot`),
+  so it compiles separately from the test harness
+  (`cargo build -p fw-controller`). The `sil_firmware` / `robot_sil` examples
+  are now thin harnesses that register the firmware by name.
 
 ### Added
 

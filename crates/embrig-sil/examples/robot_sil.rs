@@ -4,8 +4,11 @@
 //!
 //! ## The embedded code
 //!
-//! `RobotFirmware` below is the code under test — a stand-in for the rover's
-//! motion-controller firmware. It implements the [`NetEcu`] trait:
+//! The system under test is [`RobotFirmware`] — a stand-in for the rover's
+//! motion-controller firmware. It is **not** in this file: it lives in its own
+//! crate, `firmware/robot` (`fw-robot`), so it compiles separately from the
+//! test harness (`cargo build -p fw-robot`) and can be replaced by your real
+//! firmware. It implements the [`NetEcu`] trait:
 //!
 //! * `on_message` — decodes the joystick speed/steer command on `0x100` and
 //!   the e-stop state on `0x110`.
@@ -13,16 +16,14 @@
 //!   over-speed fault → idle → drive), clamps wheel speeds, and transmits the
 //!   wheel-speed command on `0x200` and the status word on `0x300` every 50 ms.
 //!
-//! This is the only part that is "the device"; everything else in this file is
-//! host test harness.
+//! This file is host test harness only.
 //!
 //! ## The host harness
 //!
-//! `main` is test infrastructure, not embedded code: it loads
-//! `robot/vehicle.yaml` + `robot/robot.dbc`, binds the `motion` node to a
-//! fresh `RobotFirmware` through a [`SilRegistry`], and runs the YAML suites in
-//! `robot/suites` with [`sil_run`]. The firmware factory is re-invoked before
-//! every test, so firmware state never leaks between tests.
+//! `main` loads `robot/vehicle.yaml` + `robot/robot.dbc`, binds the `motion`
+//! node to a fresh [`RobotFirmware`] through a [`SilRegistry`], and runs the
+//! YAML suites in `robot/suites` with [`sil_run`]. The firmware factory is
+//! re-invoked before every test, so firmware state never leaks between tests.
 //!
 //! ## Supporting files
 //!
@@ -47,134 +48,12 @@
 //! instead of hanging it, and `set_signal` on the firmware itself is rejected.
 
 use std::path::Path;
-use std::sync::OnceLock;
 
 use embrig_core::frame::CanFrame;
-use embrig_core::time::Timestamp;
 use embrig_core::{NetEcu, NetEcuError};
-use embrig_dbc::Network;
 use embrig_models::load_vehicle_config;
 use embrig_sil::{sil_run, SilRegistry};
-
-const DBC: &str = include_str!("robot/robot.dbc");
-
-fn network() -> &'static Network {
-    static NETWORK: OnceLock<Network> = OnceLock::new();
-    NETWORK.get_or_init(|| embrig_dbc::parse(DBC).expect("valid robot DBC"))
-}
-
-const MAX_SPEED: f64 = 1.5;
-const WHEEL_MAX: f64 = 3.0;
-const TRACK: f64 = 0.5;
-
-fn clamp_speed(v: f64) -> f64 {
-    v.clamp(-WHEEL_MAX, WHEEL_MAX)
-}
-
-/// The system under test: maps joystick commands to wheel speeds with an
-/// e-stop override and an over-speed fail-safe.
-struct RobotFirmware {
-    name: String,
-    speed_cmd: f64,
-    steer_cmd: f64,
-    estop: bool,
-    next_tx: Timestamp,
-    period_us: u64,
-}
-
-impl RobotFirmware {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            speed_cmd: 0.0,
-            steer_cmd: 0.0,
-            estop: false,
-            next_tx: 0,
-            period_us: 50_000,
-        }
-    }
-
-    /// Priority order: e-stop, then over-speed fault, then idle, then drive.
-    fn behaviour(&self) -> (&'static str, f64, f64) {
-        if self.estop {
-            ("ESTOP", 0.0, 0.0)
-        } else if self.speed_cmd.abs() > MAX_SPEED {
-            ("FAULT", 0.0, 0.0)
-        } else if self.speed_cmd.abs() < 1e-9 && self.steer_cmd.abs() < 1e-9 {
-            ("READY", 0.0, 0.0)
-        } else {
-            (
-                "DRIVING",
-                clamp_speed(self.speed_cmd - self.steer_cmd * TRACK),
-                clamp_speed(self.speed_cmd + self.steer_cmd * TRACK),
-            )
-        }
-    }
-}
-
-impl NetEcu<CanFrame> for RobotFirmware {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn on_message(&mut self, frame: &CanFrame, _time: Timestamp) {
-        match frame.id {
-            0x100 => {
-                if let Ok(speed) = network()
-                    .message(0x100)
-                    .unwrap()
-                    .decode_signal(&frame.data, "speed")
-                {
-                    self.speed_cmd = speed;
-                }
-                if let Ok(steer) = network()
-                    .message(0x100)
-                    .unwrap()
-                    .decode_signal(&frame.data, "steer")
-                {
-                    self.steer_cmd = steer;
-                }
-            }
-            0x110 => {
-                if let Ok(estop) = network()
-                    .message(0x110)
-                    .unwrap()
-                    .decode_signal(&frame.data, "estop")
-                {
-                    self.estop = estop > 0.5;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn update(&mut self, time: Timestamp, out: &mut Vec<CanFrame>) {
-        if time < self.next_tx {
-            return;
-        }
-        let (state, left, right) = self.behaviour();
-        let motor = network()
-            .message(0x200)
-            .unwrap()
-            .encode_signals(&[("left_speed", left), ("right_speed", right)])
-            .expect("wheel speeds encode");
-        let status = network()
-            .message(0x300)
-            .unwrap()
-            .encode_signals(&[(
-                "state",
-                network()
-                    .message(0x300)
-                    .unwrap()
-                    .physical_for_symbol("state", state)
-                    .expect("state symbol exists"),
-            )])
-            .expect("state encodes");
-        out.push(CanFrame::new(0x200, motor).expect("8-byte frame"));
-        out.push(CanFrame::new(0x300, status).expect("8-byte frame"));
-        self.next_tx = time + self.period_us;
-    }
-}
+use fw_robot::RobotFirmware;
 
 fn main() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/robot");

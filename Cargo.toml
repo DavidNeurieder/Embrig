@@ -9,6 +9,8 @@ members = [
     "crates/embrig-sil",
     "crates/embrig-net",
     "crates/embrig-cli",
+    "firmware/controller",
+    "firmware/robot",
 ]
 
 [workspace.package]
@@ -25,6 +27,9 @@ embrig-can = { path = "crates/embrig-can" }
 embrig-test = { path = "crates/embrig-test" }
 embrig-sil = { path = "crates/embrig-sil" }
 embrig-net = { path = "crates/embrig-net" }
+
+fw-controller = { path = "firmware/controller" }
+fw-robot = { path = "firmware/robot" }
 
 serde = "1.0.229"
 serde_json = "1.0"

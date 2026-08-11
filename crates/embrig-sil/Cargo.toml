@@ -16,6 +16,8 @@ thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 serde-saphyr = { workspace = true }
+fw-controller = { workspace = true }
+fw-robot = { workspace = true }
 
 [features]
 default = []

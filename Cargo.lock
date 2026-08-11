@@ -237,6 +237,8 @@ dependencies = [
  "embrig-dbc",
  "embrig-models",
  "embrig-test",
+ "fw-controller",
+ "fw-robot",
  "serde-saphyr",
  "thiserror",
  "tokio",
@@ -362,6 +364,22 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fw-controller"
+version = "0.1.0"
+dependencies = [
+ "embrig-core",
+ "embrig-dbc",
+]
+
+[[package]]
+name = "fw-robot"
+version = "0.1.0"
+dependencies = [
+ "embrig-core",
+ "embrig-dbc",
 ]
 
 [[package]]

@@ -1,0 +1,10 @@
+[package]
+name = "fw-controller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sample pump-controller firmware used by the embrig-sil software-in-the-loop examples"
+
+[dependencies]
+embrig-core = { workspace = true }
+embrig-dbc = { workspace = true }

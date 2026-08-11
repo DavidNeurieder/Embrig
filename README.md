@@ -115,7 +115,7 @@ and `fault_udp` (drop / delay / corrupt). A vehicle can be pure-Ethernet — its
 
 SIL runs your actual firmware — compiled for the host — against the virtual
 bus, so suites exercise real control logic without hardware. The firmware is
-an `Ecu` implementation registered by ECU name:
+a `NetEcu` implementation registered by ECU name:
 
 ```sh
 cargo run --example sil_firmware --package embrig-sil
@@ -123,13 +123,17 @@ cargo run --example sil_firmware --package embrig-sil
 
 → `2 passed, 0 failed`
 
-The example in `crates/embrig-sil/examples/` is a thermal-controller:
-`fixtures/vehicle.yaml` declares a `sensor` config node and a `controller`
-node with `type: sil` (firmware is code, not config). `SilRegistry` binds the
-node name to the firmware, `sil_run` runs the YAML suites, and each simulated
-firmware step runs under a wall-clock budget (default 100 ms, override with
-`step_budget_us`) — an overrun fails the test instead of hanging it. The CLI
-does not execute `--interface sil`; SIL is used from the crate:
+The example in `crates/embrig-sil/examples/` is a thermal-controller. The
+embedded code is kept separate from the test harness: the firmware lives in
+its own workspace crate (`firmware/controller`, built alone with
+`cargo build -p fw-controller`), and the example is just the harness that
+registers it. `fixtures/vehicle.yaml` declares a `sensor` config node and a
+`controller` node with `type: sil` (firmware is code, not config).
+`SilRegistry` binds the node name to the firmware, `sil_run` runs the YAML
+suites, and each simulated firmware step runs under a wall-clock budget
+(default 100 ms, override with `step_budget_us`) — an overrun fails the test
+instead of hanging it. The CLI does not execute `--interface sil`; SIL is used
+from the crate:
 
 ```rust
 let mut registry = SilRegistry::new();
