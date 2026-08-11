@@ -185,7 +185,8 @@ Step-by-step walkthroughs for testing an existing embedded system:
 - [`how_to/how-to-sil-test.md`](how_to/how-to-sil-test.md) — run your Rust
   firmware as the system under test on the virtual bus: DBC + `vehicle.yaml`,
   wrapping the firmware in the `NetEcu` trait, YAML suites, `SilRegistry` +
-  `sil_run`.
+  `sil_run`. Section 7 covers the protocol-neutral `SignalCodec` seam and the
+  hand-rolled CANopen demo (`sil_run_codec` + `embrig-canopen`).
 - [`how_to/how-to-hil-test.md`](how_to/how-to-hil-test.md) — run the same
   suites against a real ECU on a real CAN bus: SocketCAN build, hardware
   bring-up, `send`-based stimulus, loopback sanity check, caveats.

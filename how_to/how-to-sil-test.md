@@ -22,6 +22,9 @@ alongside this guide:
 
 - `crates/embrig-sil/examples/robot_sil.rs` + `examples/robot/` (full walkthrough)
 - `crates/embrig-sil/examples/sil_firmware.rs` + `examples/fixtures/` (minimal)
+- `crates/embrig-sil/examples/sil_canopen.rs` + `examples/canopen/` (the same
+  SIL demo, but the bus is described by a CANopen EDS instead of a DBC — see
+  [section 7](#7-not-dbc-speak-canopen-or-any-protocol))
 
 ## 2. Describe the network: DBC + `vehicle.yaml`
 
@@ -278,6 +281,108 @@ cargo run --example robot_sil --package embrig-sil
 - **`NotRegistered`** — a `type: sil` node has no matching factory. Check the
   registry key matches the vehicle.yaml name (the error lists what is
   registered).
+
+## 7. Not DBC? Speak CANopen (or any protocol)
+
+Embrig decodes signals through a protocol-neutral seam in `embrig-core::codec`,
+so the DBC file is only the *default* codec:
+
+- **`MessageCodec`** — one message: `id()`, `encode_signals`, `check_value`,
+  `physical_for_symbol` / `symbol_for`, `decode_signals` / `decode_signal`.
+- **`SignalCodec`** — a whole bus: `message_by_id` / `message_by_name`
+  (plus owned variants). `ConfigEcu`, the reference vECUs and the SIL target
+  resolve every message through these traits — never through a DBC path.
+
+`embrig-dbc`'s `Network` implements `SignalCodec`, which is all the previous
+sections use implicitly. To drive firmware in another protocol you implement
+`SignalCodec` for it and hand it to the SIL target instead of a DBC file:
+
+```rust
+let mut target = SilTarget::new_codec(&config, Box::new(my_codec), registry)?;
+```
+
+or the one-call form:
+
+```rust
+let result = sil_run_codec(&config, Box::new(my_codec), registry, &suites)?;
+```
+
+The `vehicle.yaml` shape is unchanged: config nodes name their message
+(`message: TPDO1`) and `expect` still decodes by signal name. Only the *codec*
+behind the names differs.
+
+### Worked example: a hand-rolled CANopen node
+
+`embrig-canopen` is a minimal CiA 301 subset (no third-party protocol crate)
+that proves the point: PDO payloads are packed with the same bit-packer as DBC,
+and heartbeat/NMT are two small bespoke message codecs. The node description
+(`canopen/eds.yaml`) replaces the DBC:
+
+```yaml
+# canopen/eds.yaml
+node_id: 1
+heartbeat_period_us: 100000
+tpdo1:
+  - name: valve_open
+    bit: 0
+    length: 1
+rpdo1:
+  - name: temperature
+    bit: 0
+    length: 16
+    factor: 0.1
+```
+
+`vehicle.yaml` lists CANopen masters as config nodes (`message: RPDO1`,
+`message: NMT`) and the firmware node as `type: sil`, listening on the
+node-specific COB-IDs:
+
+```yaml
+ecus:
+  - name: master_rpdo
+    type: config
+    message: RPDO1          # → 0x201 for node 1
+    period_us: 100000
+    signals: { temperature: 45.0 }
+  - name: master_nmt
+    type: config
+    message: NMT             # → 0x000, NMT START
+    period_us: 100000
+    signals: { node: 1.0, command: 1.0 }
+  - name: controller
+    type: sil
+    period_us: 50000
+    listen: [0x201, 0x000]
+    step_budget_us: 100000
+```
+
+The firmware under test is a `NetEcu` exactly like the DBC one — it decodes the
+RPDO1 temperature, runs the fail-safe valve law, and encodes TPDO1 +
+heartbeat via the codec. The harness differs from step 5 only in how the bus is
+described:
+
+```rust
+let eds = root.join("canopen/eds.yaml");
+let codec = CanOpenCodec::new(&EcuSpec::load(&eds)?)?;
+
+let mut registry = SilRegistry::new();
+registry.register("controller", |name, _| {
+    Ok(Box::new(CanOpenControllerFirmware::new(name)))
+});
+
+let result = sil_run_codec(&config, Box::new(codec), registry, &suites)?;
+```
+
+Run it:
+
+```sh
+cargo run --example sil_canopen --package embrig-sil
+```
+
+→ `2 passed, 0 failed` — the suites are the same `wait` / `set_signal` /
+`expect` YAML as the DBC demo, asserting on `0x181.valve_open` and the
+heartbeat. Writing your own `SignalCodec` (e.g. for a proprietary network) is
+the same exercise minus the COB-ID helpers.
 
 ## Caveats
 
