@@ -95,6 +95,13 @@ bus) and are rejected with a clear error rather than silently ignored. The
 `virtual`, `vcan0` or `udp`); the concrete device is the `interface:` field on
 the `socketcan` entry.
 
+For timing-sensitive HIL (the `restbus` target paces simulated peers from the
+host), the recommended host OS is **CachyOS with the `linux-cachyos-rt-bore`
+kernel** (PREEMPT_RT + BORE scheduler, in CachyOS's official repos); Ubuntu
+Pro's `realtime-kernel` or Debian's `linux-image-rt-amd64` are alternatives.
+See [`how_to/how-to-hil-test.md`](how_to/how-to-hil-test.md) §8 for the kernel
+verification and host tuning.
+
 ### UDP mode (Ethernet)
 
 Nodes that talk UDP/IP (not CAN) use a netmap instead of a DBC. In

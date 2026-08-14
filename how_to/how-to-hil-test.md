@@ -310,6 +310,44 @@ stimulus persists.
 - **The bus is live.** Any other node transmitting on the same interface shows
   up in `expect`. Use a dedicated test bus, not a production network.
 
+## 8. Host setup (timing-sensitive HIL)
+
+On the `restbus` target the host is in the timing path: it paces the simulated
+rest bus and transmits its frames, so host scheduling jitter shows up on the
+wire. The **recommended host is CachyOS with the `linux-cachyos-rt-bore`
+kernel** — a PREEMPT_RT build (bounded interrupt latency, sleeping spinlocks,
+threaded IRQs) with the BORE scheduler, shipped in CachyOS's official repos and
+swappable via `cachyos-kernel-manager`.
+
+Good alternatives, if you prefer a different distribution:
+
+- **Ubuntu 24.04 LTS + Ubuntu Pro** — `sudo pro enable realtime-kernel`
+  (`linux-realtime`, free for personal use on up to 5 machines).
+- **Debian** — `apt install linux-image-rt-amd64`.
+
+Whatever you pick, verify the kernel is actually RT before trusting it:
+
+```sh
+uname -r                          # should contain "rt" (or "-realtime")
+zcat /proc/config.gz | grep CONFIG_HZ   # want 1000, not 250
+```
+
+Then tune the host so the bridge loop is rarely preempted:
+
+- Pin the bridge to a dedicated core (`isolcpus`/`nohz_full` + `taskset`), or
+  at least run the loop under `SCHED_FIFO`/`SCHED_RR` (`chrt -f`).
+- `mlockall` the process so no page fault stalls a poll tick, and keep the hot
+  path allocation-free (the `restbus` drive loop already polls rather than
+  sleeps — that is the right shape).
+- Keep other load off the box while testing; CI building on the same machine
+  is the classic outlier.
+
+This is still *soft* real time — tens of µs typical jitter, not a provable
+bound — so keep `within` margins generous. For the non-safety domains Embrig
+targets (EV powertrain, robots, pumps), typical ECU tolerances (period ±10%,
+watchdogs 3–10× the message period) leave two to three orders of magnitude of
+headroom over that jitter.
+
 ## Caveats
 
 - **No router for the DUT's frames.** On the bare `socketcan` target
