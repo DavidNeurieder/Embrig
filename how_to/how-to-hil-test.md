@@ -92,9 +92,34 @@ interfaces:
     interface: can0   # the concrete device name from step 2
 ```
 
+To also run a **simulated rest bus** next to the real ECU, use `type: restbus`
+and list the rest-bus nodes (config nodes and/or the reactive vECUs) under
+`ecus` as usual — see [§4b](#4b-rest-bus-on-hil-simulated-peers). The same
+`ecus` blocks you already write for virtual/SIL become the rest bus on HIL:
+
+```yaml
+name: ev-powertrain
+dbc: powertrain.dbc
+
+ecus:
+  - name: battery
+    type: config
+    message: BatteryStatus
+    period_us: 100000
+    signals:
+      voltage: 400.0
+      state: "READY"
+
+interfaces:
+  - name: hil
+    type: restbus
+    interface: can0
+```
+
 ## 4. Write `send`-based suites
 
-On real hardware there is no virtual router, so:
+On real hardware with the bare `socketcan` target there is no virtual router,
+so:
 
 - **Config nodes do not transmit.** Periodic frames, `set_signal` overrides and
   `fault` injection are virtual-only — the runner rejects them with
@@ -116,6 +141,11 @@ steps:
   - expect: { id: 0x230, signal: state, equals: "RUNNING", within: 1s }
 ```
 
+> **If you want the rest bus back** (config nodes transmitting, `set_signal`,
+> faults, reactive vECUs), use the `restbus` interface instead — see
+> [§4b](#4b-rest-bus-on-hil-simulated-peers). `expect` assertions are identical
+> in both modes.
+
 ### How to get the raw bytes
 
 Encoding DBC signals to raw bytes by hand is error-prone. Two easy paths:
@@ -133,6 +163,42 @@ Encoding DBC signals to raw bytes by hand is error-prone. Two easy paths:
 2. **Compute from the DBC**: physical value ÷ factor = raw integer, stored
    little-endian at the signal's bit offset. (For `voltage` on `0|16@1+
    (0.1,0)`, 400.0 V → raw 4000 → bytes `A0 0F`.)
+
+## 4b. Rest bus on HIL (simulated peers)
+
+With `type: restbus` the `ecus` list from your vehicle.yaml runs as a
+**simulated rest bus** on the same interface as the real ECU under test:
+
+- Config nodes transmit their frames **on the wire** at their `period_us` — so
+  the DUT receives the same periodic telemetry it would on a real network.
+- `set_signal` on a config node overrides its next transmission (the DUT sees
+  the new value on the bus).
+- `fault` steps drop/delay/corrupt the **rest bus's** frames before they reach
+  the wire (e.g. simulate the battery dropping off the network).
+- Reactive vECUs (e.g. `motor`, `charger`) listen on the wire: send a real
+  frame and the vECU's response is transmitted on the bus for the DUT — or
+  assert on it yourself.
+- `expect` sees **everything on the bus**: rest-bus frames and the DUT's real
+  responses, through the same DBC decoder.
+
+The sim clock chases the host's clock, so periods land in wall-clock time.
+There is **no microsecond lockstep** — emission is accurate to the drive loop's
+poll interval (`POLL_US`), so keep `within` generous enough for host jitter,
+as on bare hardware.
+
+Same suites, rest bus or not: only the interface and (optionally) `set_signal`
+change.
+
+```sh
+embrig test my-project/vehicle.yaml --interface hil
+```
+
+What still does **not** work on the rest bus:
+
+- **Faults on the DUT's own frames.** There is still no router on the live bus;
+  `fault` only affects frames the simulated rest bus emits.
+- **Reset of the DUT.** `reset` rebuilds the rest bus between tests, not the
+  real ECU — each test must still drive the DUT into a known state.
 
 ## 5. Sanity check: loopback
 
@@ -198,9 +264,14 @@ embrig test my-project/vehicle.yaml --interface can0 --report report.json --repo
 
 ## 6b. Converting a SIL suite to HIL
 
-SIL and HIL share the same `expect` assertions; the only mechanical change is
-replacing config-node stimulus with explicit `send` frames (real hardware has no
-config nodes transmitting for you). For each virtual-only step:
+SIL and HIL share the same `expect` assertions. On the **bare `socketcan`**
+target the only mechanical change is replacing config-node stimulus with
+explicit `send` frames (real hardware has no config nodes transmitting for
+you). With the **`restbus`** target most suites need no conversion at all — the
+config nodes, `set_signal` and faults from the SIL suite work unchanged; only
+SIL firmware nodes (compiled-for-host ECUs) have no HIL equivalent.
+
+For the bare `socketcan` target, for each virtual-only step:
 
 | Virtual / SIL step            | HIL replacement                                                                 |
 | ----------------------------- | ------------------------------------------------------------------------------- |
@@ -229,9 +300,11 @@ stimulus persists.
 - **Wall-clock timing.** `wait` sleeps real time and `expect` polls the bus for
   up to `within`. Tests are no longer bit-for-bit deterministic — keep `within`
   generous enough for your bus jitter and hardware boot times.
-- **`reset` is a no-op.** There is no simulation to rebuild, so each test must
-  be self-contained: drive the ECU into a known state at the start of every
-  test. The device must tolerate being re-run.
+- **`reset` does not reset the ECU.** The bare `socketcan` target has nothing
+  to reset; the `restbus` target rebuilds its simulated rest bus between tests.
+  Either way the device itself keeps its state, so each test must be
+  self-contained: drive the ECU into a known state at the start of every test.
+  The device must tolerate being re-run.
 - **Own-message reception on.** Frames you send are also seen by your own
   socket (that is what the loopback test relies on).
 - **The bus is live.** Any other node transmitting on the same interface shows
@@ -239,13 +312,18 @@ stimulus persists.
 
 ## Caveats
 
-- **No router, no fault injection.** `set_signal`/`fault`/config-node periodic
-  transmission are rejected with a clear error. To test fault handling on real
-  hardware, add fault-injection to your firmware or rig the harness yourself.
+- **No router for the DUT's frames.** On the bare `socketcan` target
+  `set_signal`/`fault`/config-node transmission are rejected with a clear
+  error. On the `restbus` target they work, but only on the simulated rest bus
+  — faults and signal overrides can never touch the real ECU's own frames. To
+  test the DUT's fault handling, add fault-injection to your firmware or rig
+  the harness yourself.
 - **Isolation.** Run against a dedicated bus with only the device(s) under
   test. Do not point this at a production CAN network.
 - **Timing margins.** First boot, watchdog resets and host scheduling all add
   real-time delay — assert on outcomes within a window, not on exact timing.
+  The `restbus` emission cadence is host-granular (poll-interval tick), not a
+  hard real-time guarantee.
 
 ## Next: start SIL-first
 

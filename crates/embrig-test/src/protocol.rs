@@ -1,7 +1,8 @@
 //! Interface protocols: map an interface `kind` to a target builder.
 //!
-//! A [`Protocol`] knows the `kind` it serves (`virtual`, `udp`, `socketcan`)
-//! and builds a boxed, object-safe [`DynTestTarget`] from a [`ProtocolInput`].
+//! A [`Protocol`] knows the `kind` it serves (`virtual`, `udp`, `socketcan`,
+//! `restbus`) and builds a boxed, object-safe [`DynTestTarget`] from a
+//! [`ProtocolInput`].
 //! The [`ProtocolRegistry`] holds the known protocols, so a `kind` picked from
 //! YAML or the CLI can be resolved to a target without the caller matching on
 //! concrete types. Crates that host extra transports (e.g. `embrig-sil`)
@@ -116,6 +117,23 @@ impl Protocol for UdpProtocol {
     }
 }
 
+/// Resolve the kernel interface name for a socket-backed protocol: a declared
+/// interface name yields its `interface` field, anything else is treated as a
+/// raw kernel interface name, defaulting to `vcan0`.
+#[cfg(feature = "socketcan")]
+fn socketcan_interface(input: &ProtocolInput<'_>) -> String {
+    match input.interface {
+        Some(name) => input
+            .config
+            .interfaces
+            .iter()
+            .find(|i| i.name == name)
+            .and_then(|i| i.interface.clone())
+            .unwrap_or_else(|| name.to_string()),
+        None => "vcan0".to_string(),
+    }
+}
+
 /// A real SocketCAN interface.
 #[cfg(feature = "socketcan")]
 pub struct SocketcanProtocol;
@@ -127,16 +145,7 @@ impl Protocol for SocketcanProtocol {
     }
 
     fn build(&self, input: &ProtocolInput<'_>) -> Result<Box<dyn DynTestTarget>, TargetError> {
-        let iface_name = match input.interface {
-            Some(name) => input
-                .config
-                .interfaces
-                .iter()
-                .find(|i| i.name == name)
-                .and_then(|i| i.interface.clone())
-                .unwrap_or_else(|| name.to_string()),
-            None => "vcan0".to_string(),
-        };
+        let iface_name = socketcan_interface(input);
         let text = std::fs::read_to_string(input.dbc_path).map_err(|e| {
             TargetError::Build(format!("cannot read `{}`: {e}", input.dbc_path.display()))
         })?;
@@ -151,6 +160,27 @@ impl Protocol for SocketcanProtocol {
     }
 }
 
+/// A real SocketCAN interface bridged to the simulated rest bus.
+///
+/// The simulated nodes from `vehicle.yaml` run alongside the real ECU on the
+/// bus, so `set_signal` and faults work on HIL.
+#[cfg(feature = "socketcan")]
+pub struct RestBusProtocol;
+
+#[cfg(feature = "socketcan")]
+impl Protocol for RestBusProtocol {
+    fn kind(&self) -> &str {
+        "restbus"
+    }
+
+    fn build(&self, input: &ProtocolInput<'_>) -> Result<Box<dyn DynTestTarget>, TargetError> {
+        let iface_name = socketcan_interface(input);
+        crate::target::RestBusTarget::new(input.config, input.dbc_path, &iface_name)
+            .map(|target| Box::new(target) as Box<dyn DynTestTarget>)
+            .map_err(|e| TargetError::Build(format!("cannot open rest bus `{iface_name}`: {e}")))
+    }
+}
+
 /// Registered placeholder so `--interface socketcan` still explains itself on
 /// builds without the feature instead of reporting an unknown protocol.
 #[cfg(not(feature = "socketcan"))]
@@ -160,6 +190,24 @@ pub struct SocketcanProtocol;
 impl Protocol for SocketcanProtocol {
     fn kind(&self) -> &str {
         "socketcan"
+    }
+
+    fn build(&self, _input: &ProtocolInput<'_>) -> Result<Box<dyn DynTestTarget>, TargetError> {
+        Err(TargetError::Build(
+            "this build has no socketcan support; rebuild with `--features socketcan`".into(),
+        ))
+    }
+}
+
+/// Registered placeholder so `--interface restbus` still explains itself on
+/// builds without the feature instead of reporting an unknown protocol.
+#[cfg(not(feature = "socketcan"))]
+pub struct RestBusProtocol;
+
+#[cfg(not(feature = "socketcan"))]
+impl Protocol for RestBusProtocol {
+    fn kind(&self) -> &str {
+        "restbus"
     }
 
     fn build(&self, _input: &ProtocolInput<'_>) -> Result<Box<dyn DynTestTarget>, TargetError> {
@@ -223,6 +271,7 @@ impl Default for ProtocolRegistry {
         registry.register(VirtualProtocol);
         registry.register(UdpProtocol);
         registry.register(SocketcanProtocol);
+        registry.register(RestBusProtocol);
         registry
     }
 }

@@ -18,6 +18,9 @@ IFACE="${VCAN_IFACE:-vcan0}"
 echo "==> building with socketcan feature"
 cargo build -q --workspace --features socketcan --manifest-path "${ROOT}/Cargo.toml"
 
+echo "==> running socketcan unit tests on ${IFACE}"
+cargo test -q -p embrig-test --features socketcan --manifest-path "${ROOT}/Cargo.toml"
+
 echo "==> running loopback test on ${IFACE}"
 "${ROOT}/target/debug/embrig" test \
     "${ROOT}/examples/ev-powertrain/vehicle.yaml" \

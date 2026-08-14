@@ -56,6 +56,7 @@ enum Command {
         #[arg(value_name = "TESTS", num_args = 0..)]
         tests: Vec<PathBuf>,
         /// Interface name from vehicle.yaml, or a raw CAN interface name.
+        /// Kinds: `virtual` (default), `socketcan`, `restbus`.
         #[arg(long)]
         interface: Option<String>,
         /// Run a loopback check on the interface before the suites.

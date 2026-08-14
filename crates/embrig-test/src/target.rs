@@ -14,6 +14,8 @@ use embrig_core::codec::SignalCodec;
 use embrig_core::ecu::EcuError;
 use embrig_core::fault::{Fault, FaultRule};
 use embrig_core::frame::CanFrame;
+#[cfg(feature = "socketcan")]
+use embrig_core::network::NetRecord;
 use embrig_core::signal::SignalValue;
 use embrig_core::simulation::Simulation;
 use embrig_core::time::Timestamp;
@@ -408,6 +410,174 @@ impl TestTarget for HardwareTarget {
     }
 }
 
+/// A rest-bus test target: a real SocketCAN bus bridged to the simulated rest
+/// bus.
+///
+/// The simulated nodes declared in `vehicle.yaml` (config nodes and reactive
+/// vECUs) run in a [`Simulation`] whose clock chases the bus clock: their
+/// frames are transmitted on the real bus at their periods, and frames
+/// received on the bus are injected back so the rest bus reacts to the real
+/// ECU under test. Unlike the bare [`HardwareTarget`], `set_signal` and faults
+/// work again — they act on the simulated rest bus before its frames reach the
+/// wire. Faults and signal overrides on the real ECU's frames are not possible
+/// (there is no software router on the live bus).
+///
+/// Timing is host-level: emission is accurate to the drive loop's `POLL_US`
+/// tick, so `within` deadlines on assertions should budget for host jitter.
+#[cfg(feature = "socketcan")]
+pub struct RestBusTarget {
+    bus: embrig_can::SocketCanBus,
+    sim: Simulation,
+    ecus: HashMap<String, usize>,
+    network: Network,
+    config: VehicleConfig,
+    dbc: PathBuf,
+    /// Bus time at the last construction/reset; sim time is relative to it so
+    /// the sim clock always equals `elapsed_us`.
+    sim_base: Timestamp,
+}
+
+#[cfg(feature = "socketcan")]
+impl RestBusTarget {
+    /// Build a rest-bus target from a vehicle config, its DBC file and the
+    /// kernel CAN interface.
+    pub fn new(
+        config: &VehicleConfig,
+        dbc_path: &Path,
+        interface: &str,
+    ) -> Result<Self, TargetError> {
+        let text = std::fs::read_to_string(dbc_path).map_err(|e| {
+            TargetError::Can(format!("failed to read DBC `{}`: {e}", dbc_path.display()))
+        })?;
+        let network =
+            embrig_dbc::parse(&text).map_err(|e| TargetError::Can(format!("invalid DBC: {e}")))?;
+        let built = build_simulation_indexed(config, dbc_path)
+            .map_err(|e| TargetError::Can(e.to_string()))?;
+        let bus = embrig_can::SocketCanBus::open(interface)
+            .map_err(|e| TargetError::Can(e.to_string()))?;
+        Ok(Self {
+            sim_base: bus.now_us(),
+            bus,
+            sim: built.sim,
+            ecus: built.ecus.into_iter().collect(),
+            network,
+            config: config.clone(),
+            dbc: dbc_path.to_path_buf(),
+        })
+    }
+
+    /// Drive the bridge for `duration` µs of bus time.
+    ///
+    /// Each iteration receives at most one inbound frame and injects it into
+    /// the simulation, then runs the simulation up to the current bus clock so
+    /// rest-bus frames emit at their periods in wall clock. Frames emitted by
+    /// the simulation since the previous iteration are transmitted on the bus.
+    async fn drive(&mut self, duration: Timestamp) -> Result<(), TargetError> {
+        let deadline = self.elapsed_us().saturating_add(duration);
+        while self.elapsed_us() < deadline {
+            let remaining = deadline.saturating_sub(self.elapsed_us());
+            let step = remaining.min(POLL_US);
+            let inbound = self
+                .bus
+                .recv(std::time::Duration::from_micros(step))
+                .await
+                .map_err(|e| TargetError::Can(e.to_string()))?;
+            if let Some(frame) = inbound {
+                self.sim.inject(frame);
+            }
+
+            let watermark = self.sim.recorder().records.len();
+            self.sim.run_until(self.bus.now_us() - self.sim_base);
+            let emitted: Vec<CanFrame> = self.sim.recorder().records[watermark..]
+                .iter()
+                .filter_map(|record| match record {
+                    NetRecord::Message(frame) => Some(frame.clone()),
+                    NetRecord::Event { .. } => None,
+                })
+                .collect();
+            for frame in emitted {
+                self.bus
+                    .send(&frame)
+                    .await
+                    .map_err(|e| TargetError::Can(e.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "socketcan")]
+impl CanLink for RestBusTarget {
+    fn codec(&self) -> &dyn SignalCodec {
+        &self.network
+    }
+
+    fn set_signal(
+        &mut self,
+        ecu: &str,
+        id: u32,
+        signal: &str,
+        value: SignalValue,
+    ) -> Result<(), TargetError> {
+        let index = self
+            .ecus
+            .get(ecu)
+            .ok_or_else(|| TargetError::UnknownEcu(ecu.to_string()))?;
+        self.sim.set_signal(*index, id, signal, value)?;
+        Ok(())
+    }
+
+    fn add_fault(
+        &mut self,
+        fault: Fault,
+        start: Option<Timestamp>,
+        duration: Option<Timestamp>,
+    ) -> Result<(), TargetError> {
+        self.sim.add_fault(FaultRule {
+            fault,
+            start: start.unwrap_or(self.sim.time()),
+            duration,
+        });
+        Ok(())
+    }
+
+    fn send(&mut self, frame: CanFrame) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move {
+            self.bus
+                .send(&frame)
+                .await
+                .map_err(|e| TargetError::Can(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn poll(&mut self, id: u32) -> BoxFut<'_, Result<Option<CanFrame>, TargetError>> {
+        Box::pin(async move {
+            self.drive(POLL_US).await?;
+            Ok(self.sim.recorder().last_message(&id).cloned())
+        })
+    }
+}
+
+#[cfg(feature = "socketcan")]
+impl NetmapLink for RestBusTarget {}
+
+#[cfg(feature = "socketcan")]
+impl TestTarget for RestBusTarget {
+    fn elapsed_us(&self) -> Timestamp {
+        self.bus.now_us().saturating_sub(self.sim_base)
+    }
+
+    fn reset(&mut self) -> Result<(), TargetError> {
+        *self = Self::new(&self.config, &self.dbc, self.bus.interface())?;
+        Ok(())
+    }
+
+    fn wait(&mut self, duration: Timestamp) -> BoxFut<'_, Result<(), TargetError>> {
+        Box::pin(async move { self.drive(duration).await })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,5 +740,213 @@ VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
             target.set_signal("nope", 0x100, "voltage", SignalValue::Num(1.0)),
             Err(TargetError::UnknownEcu(_))
         ));
+    }
+
+    /// Rest bus tests exercise the real SocketCAN path, so they need a vcan
+    /// interface. When none is available (plain `cargo test` without the vcan
+    /// module loaded) the tests skip themselves so the suite stays green
+    /// without root. `scripts/vcan-smoke.sh` brings vcan0 up and runs the
+    /// socketcan feature tests.
+    #[cfg(feature = "socketcan")]
+    mod restbus {
+        use super::*;
+
+        const DBC: &str = r#"VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: engine
+
+BO_ 256 BatteryStatus: 8 engine
+ SG_ voltage : 0|16@1+ (0.1,0) [0|600] "V" engine
+ SG_ state : 16|4@1+ (1,0) [0|4] "" engine
+
+BO_ 544 MotorEnable: 8 engine
+ SG_ motor_enable : 0|1@1+ (1,0) [0|1] "" engine
+
+BO_ 560 MotorStatus: 8 engine
+ SG_ state : 0|8@1+ (1,0) [0|4] "" engine
+ SG_ rpm : 8|16@1+ (1,0) [0|12000] "rpm" engine
+
+VAL_ 256 state 0 "OFF" 1 "INIT" 2 "READY" 3 "CHARGING" 4 "FAULT" ;
+VAL_ 560 state 0 "OFF" 1 "READY" 2 "RUNNING" 3 "SAFE" 4 "FAULT" ;
+"#;
+
+        const IFACE: &str = "vcan0";
+
+        /// Serializes the rest-bus tests: only one rest bus may be live at a
+        /// time, otherwise one test's frames would inject into another's sim
+        /// on the shared vcan0.
+        static RESTBUS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        fn battery_yaml(tag: &str) -> PathBuf {
+            tmp_file(
+                &format!("restbus-{tag}.yaml"),
+                r#"
+name: demo
+dbc: restbus-periodic.dbc
+step_us: 1000
+ecus:
+  - name: battery
+    type: config
+    message: BatteryStatus
+    period_us: 100000
+    signals:
+      voltage: 400.0
+      state: "READY"
+interfaces:
+  - name: hil
+    type: restbus
+    interface: vcan0
+"#,
+            )
+        }
+
+        fn roundtrip_yaml(tag: &str) -> PathBuf {
+            tmp_file(
+                &format!("restbus-{tag}.yaml"),
+                r#"
+name: demo
+dbc: restbus-roundtrip.dbc
+step_us: 1000
+ecus:
+  - name: battery
+    type: config
+    message: BatteryStatus
+    period_us: 100000
+    signals:
+      voltage: 400.0
+      state: "READY"
+  - name: motor
+    type: motor
+    period_us: 50000
+    listen: [0x220]
+interfaces:
+  - name: hil
+    type: restbus
+    interface: vcan0
+"#,
+            )
+        }
+
+        fn dbc_file(name: &str) -> PathBuf {
+            tmp_file(name, DBC)
+        }
+
+        fn motor_enable(enable: bool) -> CanFrame {
+            CanFrame::new(0x220, vec![if enable { 1 } else { 0 }, 0, 0, 0, 0, 0, 0, 0]).unwrap()
+        }
+
+        fn codec() -> embrig_dbc::Network {
+            embrig_dbc::parse(DBC).unwrap()
+        }
+
+        fn decoded_signal(frame: &CanFrame, signal: &str) -> f64 {
+            codec()
+                .message(frame.id)
+                .unwrap()
+                .decode_signal(&frame.data, signal)
+                .unwrap()
+        }
+
+        fn decoded_symbol(frame: &CanFrame, signal: &str) -> String {
+            let raw = decoded_signal(frame, signal).round() as i64;
+            codec()
+                .message(frame.id)
+                .unwrap()
+                .symbol_for(signal, raw)
+                .unwrap()
+        }
+
+        fn build(tag: &str, yaml: PathBuf) -> Option<RestBusTarget> {
+            let config: VehicleConfig =
+                serde_saphyr::from_str(&std::fs::read_to_string(&yaml).unwrap()).unwrap();
+            RestBusTarget::new(&config, &dbc_file(&format!("restbus-{tag}.dbc")), IFACE).ok()
+        }
+
+        /// Build a target, then drive it briefly and reset it so the sim
+        /// starts empty on a drained bus (frames left over from earlier runs
+        /// cannot leak into the fresh sim).
+        async fn fresh_target(tag: &str, yaml: PathBuf) -> Option<RestBusTarget> {
+            let mut target = build(tag, yaml)?;
+            target.wait(50_000).await.ok()?;
+            target.reset().ok()?;
+            Some(target)
+        }
+
+        #[tokio::test]
+        async fn config_node_emits_periodically_on_the_bus() {
+            let _guard = RESTBUS_LOCK.lock().unwrap();
+            let Some(mut target) = fresh_target("periodic", battery_yaml("periodic")).await else {
+                return;
+            };
+            // A second socket observes the wire while the rest bus drives.
+            let observer = embrig_can::SocketCanBus::open(IFACE).unwrap();
+            target.wait(250_000).await.unwrap();
+            let wire = observer
+                .recv(std::time::Duration::from_secs(2))
+                .await
+                .unwrap()
+                .expect("a frame on the wire");
+            assert_eq!(wire.id, 0x100, "rest-bus frame reached the bus");
+
+            let frame = target.poll(0x100).await.unwrap().expect("battery frame");
+            assert!((decoded_signal(&frame, "voltage") - 400.0).abs() < 1e-6);
+            assert_eq!(decoded_symbol(&frame, "state"), "READY");
+        }
+
+        #[tokio::test]
+        async fn set_signal_stimulus_works_on_the_rest_bus() {
+            let _guard = RESTBUS_LOCK.lock().unwrap();
+            let Some(mut target) = fresh_target("signal", battery_yaml("signal")).await else {
+                return;
+            };
+            target
+                .set_signal("battery", 0x100, "voltage", SignalValue::Num(500.0))
+                .unwrap();
+            target.wait(150_000).await.unwrap();
+            let frame = target.poll(0x100).await.unwrap().expect("battery frame");
+            assert!((decoded_signal(&frame, "voltage") - 500.0).abs() < 1e-6);
+        }
+
+        #[tokio::test]
+        async fn fault_drops_rest_bus_frames_on_the_bus() {
+            let _guard = RESTBUS_LOCK.lock().unwrap();
+            let Some(mut target) = fresh_target("fault", battery_yaml("fault")).await else {
+                return;
+            };
+            target
+                .add_can_fault(Fault::DropFrame { id: 0x100 }, Some(0), None)
+                .unwrap();
+            target.wait(150_000).await.unwrap();
+            assert!(
+                target.poll(0x100).await.unwrap().is_none(),
+                "faulted rest-bus frame must not be delivered"
+            );
+        }
+
+        #[tokio::test]
+        async fn real_bus_traffic_drives_the_reactive_rest_bus() {
+            let _guard = RESTBUS_LOCK.lock().unwrap();
+            let Some(mut target) = fresh_target("roundtrip", roundtrip_yaml("roundtrip")).await
+            else {
+                return;
+            };
+            // Force the motor to a known state, then verify the enable frame
+            // travels out to the bus and back in through the socket.
+            target.send(motor_enable(false)).await.unwrap();
+            target.wait(120_000).await.unwrap();
+            let safe = target.poll(0x230).await.unwrap().expect("motor status");
+            assert_eq!(decoded_symbol(&safe, "state"), "SAFE");
+            assert_eq!(decoded_signal(&safe, "rpm"), 0.0);
+
+            target.send(motor_enable(true)).await.unwrap();
+            target.wait(120_000).await.unwrap();
+            let running = target.poll(0x230).await.unwrap().expect("motor status");
+            assert_eq!(decoded_symbol(&running, "state"), "RUNNING");
+            assert_eq!(decoded_signal(&running, "rpm"), 3000.0);
+        }
     }
 }
