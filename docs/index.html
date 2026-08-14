@@ -61,7 +61,7 @@
           <div class="card">
             <div class="icon">🔁</div>
             <h3>One suite, many targets</h3>
-            <p>The same YAML tests drive host-compiled firmware (SIL), the virtual simulation on your laptop, a live CAN bus over SocketCAN, or an Ethernet (UDP) network — without rewriting anything.</p>
+            <p>The same YAML tests drive host-compiled firmware (SIL), the virtual simulation on your laptop, a live CAN bus over SocketCAN — bare, or with a <code>restbus</code> of simulated peers running beside your real ECU — or an Ethernet (UDP) network. Without rewriting anything.</p>
           </div>
           <div class="card">
             <div class="icon">📐</div>
@@ -116,7 +116,7 @@
             <span class="num">4</span>
             <div>
               <h3>Re-run against real hardware</h3>
-              <p>The identical suite drives a physical ECU over SocketCAN, or talks to Ethernet nodes over a real UDP socket. No router in the loop: <code>set_signal</code>, <code>set_field</code> and <code>fault</code> are rejected with a clear error, not silently ignored.</p>
+              <p>The identical suite drives a physical ECU over SocketCAN, or talks to Ethernet nodes over a real UDP socket. On a bare socket, <code>set_signal</code>, <code>set_field</code> and <code>fault</code> are rejected with a clear error — not silently ignored. Switch the interface to <code>restbus</code> and your simulated peers (config nodes, reactive vECUs) run beside the real ECU as a hardware-in-the-loop rest bus.</p>
             </div>
           </div>
         </div>
@@ -202,7 +202,12 @@ cargo run --bin embrig -- test my-project/vehicle.yaml
 # Drive a real CAN bus (build with the socketcan feature)
 cargo build --features socketcan
 cargo run --features socketcan --bin embrig -- \
-  test my-project/vehicle.yaml --interface vcan0</code></pre>
+  test my-project/vehicle.yaml --interface vcan0
+
+# … or add a simulated rest bus beside your real ECU
+# (interface "hil" is declared in vehicle.yaml with type: restbus)
+cargo run --features socketcan --bin embrig -- \
+  test my-project/vehicle.yaml --interface hil</code></pre>
         </div>
 
         <h3 class="center">A test in plain YAML</h3>
@@ -222,7 +227,7 @@ steps:
         <div class="centered-code">
           <pre class="code-block"><code>cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --features socketcan   # 130 tests, incl. 10 CLI black-box
+cargo test --workspace --features socketcan   # 178 tests, incl. 11 CLI black-box
 cargo run --example sil_firmware --package embrig-sil
 cargo run --example robot_sil --package embrig-sil
 cargo run --example udp_rover --package embrig-test
